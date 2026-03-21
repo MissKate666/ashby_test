@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.patches import Ellipse
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -28,6 +27,7 @@ class AshbyDiagramWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.df = None
+        self.current_dataset_path = None
         self.init_ui()
         self.load_default_dataset()
 
@@ -108,11 +108,13 @@ class AshbyDiagramWindow(QMainWindow):
 
     def load_dataset(self, file_path: Path):
         try:
-            self.df = pd.read_csv(file_path)
-            self.df.columns = self.df.columns.str.strip()
-            self.validate_dataset(self.df)
+            df = pd.read_csv(file_path)
+            df.columns = df.columns.str.strip()
+            self.validate_dataset(df)
+            self.df = df
+            self.current_dataset_path = file_path
             self.file_label.setText(f'Loaded: {file_path.name}')
-            self.update_data_info(file_path)
+            self.update_data_info()
             self.update_plot()
         except Exception as exc:
             QMessageBox.critical(self, "Error", f"Failed to load dataset:\n{exc}")
@@ -123,9 +125,7 @@ class AshbyDiagramWindow(QMainWindow):
             'label',
             'x_center',
             'y_center',
-            'width',
-            'height',
-            'angle',
+            'bubble_size',
             'color',
             'description',
         }
@@ -134,40 +134,32 @@ class AshbyDiagramWindow(QMainWindow):
             missing_text = ', '.join(sorted(missing))
             raise ValueError(f'Missing required columns: {missing_text}')
 
-    def update_data_info(self, file_path: Path):
+    def update_data_info(self):
         if self.df is None:
             self.data_info_label.setText('No data loaded')
             return
 
+        dataset_name = self.current_dataset_path.name if self.current_dataset_path else 'unknown'
         info_text = [
-            f"Dataset: {file_path.name}",
-            f"Primary regions: {len(self.df)}",
+            f"Dataset: {dataset_name}",
+            f"Primary materials: {len(self.df)}",
             "Axes: Toughness (kJ/m²) vs Strength (MPa)",
-            "Chart source: CSV-driven ellipses",
+            "Chart source: CSV-driven circles",
+            "Autodraw: enabled after dataset load",
         ]
         self.data_info_label.setText('\n'.join(info_text))
 
     def add_region(self, ax, row):
-        ellipse = Ellipse(
-            (row['x_center'], row['y_center']),
-            row['width'],
-            row['height'],
-            angle=row['angle'],
-            facecolor=row['color'],
-            edgecolor='black',
-            alpha=0.52,
-            linewidth=1.4,
-            zorder=2,
-        )
-        ax.add_patch(ellipse)
         ax.scatter(
             row['x_center'],
             row['y_center'],
-            s=46,
-            color=row['color'],
+            s=row['bubble_size'],
+            c=row['color'],
+            alpha=0.58,
             edgecolors='black',
-            linewidth=0.8,
-            zorder=3,
+            linewidth=1.2,
+            marker='o',
+            zorder=2,
         )
         ax.text(
             row['x_center'],
@@ -177,7 +169,7 @@ class AshbyDiagramWindow(QMainWindow):
             va='center',
             fontsize=10,
             weight='bold',
-            zorder=4,
+            zorder=3,
         )
 
     def update_plot(self):
@@ -219,17 +211,7 @@ class AshbyDiagramWindow(QMainWindow):
 
             self.figure.tight_layout()
             self.canvas.draw()
-
-            self.data_info_label.setText(
-                '\n'.join(
-                    [
-                        f"Primary regions: {len(self.df)}",
-                        "Heatmap removed",
-                        "Axes: Toughness (kJ/m²) vs Strength (MPa)",
-                        "Main bubbles: 8",
-                    ]
-                )
-            )
+            self.update_data_info()
         except Exception as exc:
             QMessageBox.critical(self, 'Error', f'Failed to update plot:\n{exc}')
 
