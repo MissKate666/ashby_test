@@ -1,9 +1,9 @@
 group_name,x_center,y_center,width,height,angle,color,toughness_kJ_m2,strength_MPa,notes
-Glasses,0.02,200,0.05,800,10,#f4c542,0.02,200,Primary Ashby bubble
-Natural materials,0.2,20,0.6,40,25,#2ca58d,0.2,20,Primary Ashby bubble
-Polymers,1,50,3,100,10,#ff6b6b,1,50,Primary Ashby bubble
-Metals & alloys,5,500,8,2000,-10,#8e7cc3,5,500,Primary Ashby bubble
-Composites,20,1000,40,3000,0,#b4a7d6,20,1000,Primary Ashby bubble
-Ceramics,0.005,5,0.02,8,0,#d9b38c,0.005,5,Primary Ashby bubble
-Foams,0.003,1.2,0.01,2.2,-5,#9fc5e8,0.003,1.2,Primary Ashby bubble
-Elastomers,0.08,2.5,0.18,4,15,#93c47d,0.08,2.5,Primary Ashby bubble
+Foams,0.035,1.5,0.12,5.0,28,#cddc72,0.035,1.5,Primary Ashby region
+Natural materials,0.35,8,1.10,18.0,22,#8fd19e,0.35,8,Primary Ashby region
+Polymers,1.25,22,1.70,26.0,8,#8cc6df,1.25,22,Primary Ashby region
+Elastomers,1.05,5.5,0.90,10.0,10,#9ab6e8,1.05,5.5,Primary Ashby region
+Composites,1.80,120,1.00,180.0,10,#c7a0d8,1.8,120,Primary Ashby region
+Ceramics,4.50,160,3.20,290.0,8,#efe76a,4.5,160,Primary Ashby region
+Glasses,2.80,85,1.60,120.0,6,#f3c65a,2.8,85,Primary Ashby region
+Metals,18.0,120,24.0,220.0,0,#ee8f8f,18,120,Primary Ashby region

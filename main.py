@@ -336,6 +336,15 @@ class AshbyDiagramWindow(QMainWindow):
                 zorder=2
             )
 
+    def get_ashby_axis_limits(self, ashby_df):
+        """Подбор пределов осей с учетом размеров областей Эшби."""
+        x_min = (ashby_df['x_center'] - ashby_df['width'] / 2).clip(lower=1e-4).min()
+        x_max = (ashby_df['x_center'] + ashby_df['width'] / 2).max()
+        y_min = (ashby_df['y_center'] - ashby_df['height'] / 2).clip(lower=1e-3).min()
+        y_max = (ashby_df['y_center'] + ashby_df['height'] / 2).max()
+
+        return x_min * 0.8, x_max * 1.15, y_min * 0.8, y_max * 1.15
+
     def update_plot(self):
         """Обновление графика"""
         if self.df is None:
@@ -396,9 +405,9 @@ class AshbyDiagramWindow(QMainWindow):
             if self.is_ashby_dataset() and self.show_ashby.isChecked():
                 ashby_df = filtered_df.loc[mask].copy()
                 self.add_ashby_regions(ax, ashby_df)
-                ax.scatter(x_clean, y_clean,
-                           alpha=0.9, s=40, c='black',
-                           edgecolors='white', linewidth=0.7, zorder=3)
+                x_min, x_max, y_min, y_max = self.get_ashby_axis_limits(ashby_df)
+                ax.set_xlim(x_min, x_max)
+                ax.set_ylim(y_min, y_max)
             else:
                 ax.scatter(x_clean, y_clean,
                            alpha=0.6, s=30, c='blue',
@@ -410,6 +419,10 @@ class AshbyDiagramWindow(QMainWindow):
 
             # Добавляем единицы измерения
             units = {
+                'x_center': 'Toughness (kJ/m²)',
+                'toughness_kJ_m2': 'Toughness (kJ/m²)',
+                'y_center': 'Strength (MPa)',
+                'strength_MPa': 'Strength (MPa)',
                 'elasticity.K_VRH': 'Bulk Modulus (GPa)',
                 'K_VRH': 'Bulk Modulus (GPa)',
                 'elasticity.G_VRH': 'Shear Modulus (GPa)',
@@ -430,9 +443,12 @@ class AshbyDiagramWindow(QMainWindow):
             ax.set_ylabel(y_label, fontsize=12)
 
             # Заголовок
-            title = f'Materials Properties: {y_col} vs {x_col}'
-            if len(filtered_df) < len(self.df):
-                title += f'\n(Showing {len(x_clean)} of {len(self.df)} materials)'
+            if self.is_ashby_dataset() and self.show_ashby.isChecked():
+                title = 'Ashby Chart: Strength vs Toughness'
+            else:
+                title = f'Materials Properties: {y_col} vs {x_col}'
+                if len(filtered_df) < len(self.df):
+                    title += f'\n(Showing {len(x_clean)} of {len(self.df)} materials)'
             ax.set_title(title, fontsize=14, fontweight='bold')
 
             # Сетка
@@ -446,7 +462,10 @@ class AshbyDiagramWindow(QMainWindow):
             self.canvas.draw()
 
             # Обновляем информацию
-            stats_text = f"Displaying: {len(x_clean)} points\n"
+            if self.is_ashby_dataset() and self.show_ashby.isChecked():
+                stats_text = f"Displaying: {len(filtered_df.loc[mask])} Ashby regions\n"
+            else:
+                stats_text = f"Displaying: {len(x_clean)} points\n"
             stats_text += f"X range: {x_clean.min():.2e} - {x_clean.max():.2e}\n"
             stats_text += f"Y range: {y_clean.min():.2e} - {y_clean.max():.2e}"
             self.data_info_label.setText(stats_text)
