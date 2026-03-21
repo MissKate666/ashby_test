@@ -93,7 +93,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.log_y.setChecked(True)
         display_layout.addWidget(self.log_y)
 
-        self.show_ashby = QCheckBox('Show Ashby regions (for K_VRH vs G_VRH)')
+        self.show_ashby = QCheckBox('Show Ashby regions')
         self.show_ashby.setChecked(True)
         display_layout.addWidget(self.show_ashby)
 
@@ -101,9 +101,6 @@ class AshbyDiagramWindow(QMainWindow):
         self.show_indices.setChecked(True)
         display_layout.addWidget(self.show_indices)
 
-        self.color_by_bandgap = QCheckBox('Color by band gap')
-        self.color_by_bandgap.setChecked(True)
-        display_layout.addWidget(self.color_by_bandgap)
 
         display_group.setLayout(display_layout)
         control_layout.addWidget(display_group)
@@ -144,27 +141,6 @@ class AshbyDiagramWindow(QMainWindow):
         main_layout.addWidget(control_panel)
         main_layout.addWidget(plot_panel, stretch=1)
 
-        # Предопределенные области для диаграммы Эшби
-        self.ashby_regions = {
-            "Metals": {
-                "K_range": (50e9, 250e9),  # GPa
-                "G_range": (20e9, 150e9),  # GPa
-                "color": "#8e7cc3",
-                "alpha": 0.3
-            },
-            "Polymers": {
-                "K_range": (1e9, 5e9),
-                "G_range": (0.1e9, 2e9),
-                "color": "#ff6b6b",
-                "alpha": 0.3
-            },
-            "Ceramics": {
-                "K_range": (100e9, 400e9),
-                "G_range": (50e9, 200e9),
-                "color": "#f4c542",
-                "alpha": 0.3
-            }
-        }
 
     def load_csv(self):
         """Загрузка CSV файла"""
@@ -248,8 +224,8 @@ class AshbyDiagramWindow(QMainWindow):
             self.y_combo.addItems(numeric_columns)
 
             # Устанавливаем разумные значения по умолчанию
-            preferred_x = ['elasticity.K_VRH', 'K_VRH', 'bulk_modulus', 'volume', 'density']
-            preferred_y = ['elasticity.G_VRH', 'G_VRH', 'shear_modulus', 'band_gap', 'energy_per_atom']
+            preferred_x = ['x_center', 'toughness_kJ_m2', 'elasticity.K_VRH', 'K_VRH', 'bulk_modulus', 'volume', 'density']
+            preferred_y = ['y_center', 'strength_MPa', 'elasticity.G_VRH', 'G_VRH', 'shear_modulus', 'band_gap', 'energy_per_atom']
 
             for pref in preferred_x:
                 if pref in numeric_columns:
@@ -322,36 +298,42 @@ class AshbyDiagramWindow(QMainWindow):
 
         return filtered_df
 
-    def add_ashby_regions(self, ax):
-        """Добавление областей Эшби для модулей упругости"""
-        # Конвертируем в GPa для удобства отображения
-        for material_class, props in self.ashby_regions.items():
-            K_min, K_max = props["K_range"]
-            G_min, G_max = props["G_range"]
+    def is_ashby_dataset(self):
+        """Проверка, что загружен CSV с основными областями диаграммы Эшби."""
+        if self.df is None:
+            return False
 
-            # Создаем прямоугольную область
-            rect = plt.Rectangle(
-                (K_min, G_min),
-                K_max - K_min,
-                G_max - G_min,
-                facecolor=props["color"],
-                edgecolor="black",
-                alpha=props["alpha"],
+        required_columns = {
+            'group_name', 'x_center', 'y_center', 'width',
+            'height', 'angle', 'color'
+        }
+        return required_columns.issubset(set(self.df.columns))
+
+    def add_ashby_regions(self, ax, ashby_df):
+        """Добавление 8 основных областей диаграммы Эшби в виде эллипсов."""
+        for _, region in ashby_df.iterrows():
+            ellipse = Ellipse(
+                (region['x_center'], region['y_center']),
+                width=region['width'],
+                height=region['height'],
+                angle=region['angle'],
+                facecolor=region['color'],
+                edgecolor='black',
+                alpha=0.45,
                 linewidth=1.5,
-                label=material_class
+                zorder=1
             )
-            ax.add_patch(rect)
-
-            # Добавляем текст
+            ax.add_patch(ellipse)
             ax.text(
-                (K_min + K_max) / 2,
-                (G_min + G_max) / 2,
-                material_class,
-                ha="center",
-                va="center",
+                region['x_center'],
+                region['y_center'],
+                region['group_name'],
+                ha='center',
+                va='center',
                 fontsize=10,
-                weight="bold",
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7)
+                weight='bold',
+                bbox=dict(boxstyle='round,pad=0.25', facecolor='white', alpha=0.8),
+                zorder=2
             )
 
     def update_plot(self):
@@ -410,29 +392,17 @@ class AshbyDiagramWindow(QMainWindow):
             if self.log_y.isChecked() and y_clean.min() > 0:
                 ax.set_yscale("log")
 
-            # Добавляем данные
-            if self.color_by_bandgap.isChecked() and 'band_gap' in filtered_df.columns:
-                # Раскрашиваем по band_gap
-                band_gap = pd.to_numeric(filtered_df.loc[mask, 'band_gap'], errors='coerce')
-                if not band_gap.isna().all():
-                    scatter = ax.scatter(x_clean, y_clean,
-                                         c=band_gap, cmap='viridis',
-                                         alpha=0.6, s=30, edgecolors='black',
-                                         linewidth=0.5, zorder=3)
-                    plt.colorbar(scatter, ax=ax, label='Band Gap (eV)')
-                else:
-                    ax.scatter(x_clean, y_clean,
-                               alpha=0.6, s=30, c='blue',
-                               edgecolors='black', linewidth=0.5, zorder=3)
+            # Добавляем данные без тепловой карты
+            if self.is_ashby_dataset() and self.show_ashby.isChecked():
+                ashby_df = filtered_df.loc[mask].copy()
+                self.add_ashby_regions(ax, ashby_df)
+                ax.scatter(x_clean, y_clean,
+                           alpha=0.9, s=40, c='black',
+                           edgecolors='white', linewidth=0.7, zorder=3)
             else:
                 ax.scatter(x_clean, y_clean,
                            alpha=0.6, s=30, c='blue',
                            edgecolors='black', linewidth=0.5, zorder=3)
-
-            # Добавляем области Эшби для модулей упругости
-            if self.show_ashby.isChecked():
-                if ('K_VRH' in x_col or 'bulk' in x_col.lower()) and ('G_VRH' in y_col or 'shear' in y_col.lower()):
-                    self.add_ashby_regions(ax)
 
             # Настройка подписей
             x_label = x_col

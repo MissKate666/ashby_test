@@ -1,0 +1,9 @@
+group_name,x_center,y_center,width,height,angle,color,toughness_kJ_m2,strength_MPa,notes
+Glasses,0.02,200,0.05,800,10,#f4c542,0.02,200,Primary Ashby bubble
+Natural materials,0.2,20,0.6,40,25,#2ca58d,0.2,20,Primary Ashby bubble
+Polymers,1,50,3,100,10,#ff6b6b,1,50,Primary Ashby bubble
+Metals & alloys,5,500,8,2000,-10,#8e7cc3,5,500,Primary Ashby bubble
+Composites,20,1000,40,3000,0,#b4a7d6,20,1000,Primary Ashby bubble
+Ceramics,0.005,5,0.02,8,0,#d9b38c,0.005,5,Primary Ashby bubble
+Foams,0.003,1.2,0.01,2.2,-5,#9fc5e8,0.003,1.2,Primary Ashby bubble
+Elastomers,0.08,2.5,0.18,4,15,#93c47d,0.08,2.5,Primary Ashby bubble
