@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.patches import Polygon as MplPolygon
-from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -61,7 +60,7 @@ class AshbyDiagramWindow(QMainWindow):
         cond_group = QGroupBox("Условия")
         cond_layout = QFormLayout()
         self.condition_combo = QComboBox()
-        self.condition_combo.addItems(["Лёгкость (E/ρ)", "Прочность (σ/ρ)", "Изгиб (√E/ρ)"])
+        self.condition_combo.addItems(["Не выбрано", "Лёгкость (E/ρ)", "Прочность (σ/ρ)", "Изгиб (√E/ρ)"])
         self.condition_combo.currentIndexChanged.connect(self.on_condition_changed)
         cond_layout.addRow("Критерий:", self.condition_combo)
 
@@ -72,17 +71,8 @@ class AshbyDiagramWindow(QMainWindow):
         cond_group.setLayout(cond_layout)
         panel_layout.addWidget(cond_group)
 
-        axis_group = QGroupBox("Оси и диапазон (опционально)")
+        axis_group = QGroupBox("Диапазон по осям (опционально)")
         axis_layout = QGridLayout()
-        self.x_axis_combo = QComboBox()
-        self.y_axis_combo = QComboBox()
-        self.x_axis_combo.currentIndexChanged.connect(self.update_plot)
-        self.y_axis_combo.currentIndexChanged.connect(self.update_plot)
-        axis_layout.addWidget(QLabel("Ось X:"), 0, 0)
-        axis_layout.addWidget(self.x_axis_combo, 0, 1)
-        axis_layout.addWidget(QLabel("Ось Y:"), 1, 0)
-        axis_layout.addWidget(self.y_axis_combo, 1, 1)
-
         self.x_min_input = QLineEdit()
         self.x_max_input = QLineEdit()
         self.y_min_input = QLineEdit()
@@ -91,14 +81,14 @@ class AshbyDiagramWindow(QMainWindow):
             w.setPlaceholderText("пусто = без ограничения")
             w.editingFinished.connect(self.update_plot)
 
-        axis_layout.addWidget(QLabel("X min"), 2, 0)
-        axis_layout.addWidget(self.x_min_input, 2, 1)
-        axis_layout.addWidget(QLabel("X max"), 3, 0)
-        axis_layout.addWidget(self.x_max_input, 3, 1)
-        axis_layout.addWidget(QLabel("Y min"), 4, 0)
-        axis_layout.addWidget(self.y_min_input, 4, 1)
-        axis_layout.addWidget(QLabel("Y max"), 5, 0)
-        axis_layout.addWidget(self.y_max_input, 5, 1)
+        axis_layout.addWidget(QLabel("X min"), 0, 0)
+        axis_layout.addWidget(self.x_min_input, 0, 1)
+        axis_layout.addWidget(QLabel("X max"), 1, 0)
+        axis_layout.addWidget(self.x_max_input, 1, 1)
+        axis_layout.addWidget(QLabel("Y min"), 2, 0)
+        axis_layout.addWidget(self.y_min_input, 2, 1)
+        axis_layout.addWidget(QLabel("Y max"), 3, 0)
+        axis_layout.addWidget(self.y_max_input, 3, 1)
         axis_group.setLayout(axis_layout)
         panel_layout.addWidget(axis_group)
 
@@ -139,12 +129,6 @@ class AshbyDiagramWindow(QMainWindow):
 
             self.df = materials.merge(subgroups, on="subgroup_id", how="left").merge(groups, on="group_id", how="left")
 
-            axis_cols = ["Density_kg_m3", "Youngs_Modulus_GPa", "Strength_MPa"]
-            self.x_axis_combo.clear()
-            self.y_axis_combo.clear()
-            self.x_axis_combo.addItems(axis_cols)
-            self.y_axis_combo.addItems(axis_cols)
-            self.x_axis_combo.setCurrentText("Density_kg_m3")
             self.on_condition_changed()
             self.info_label.setText(f"Загружено материалов: {len(self.df)}")
             self.update_plot()
@@ -153,20 +137,24 @@ class AshbyDiagramWindow(QMainWindow):
 
     def current_condition_config(self):
         idx = self.condition_combo.currentIndex()
-        if idx == 0:
-            return {"y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
         if idx == 1:
+            return {"y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
+        if idx == 2:
             return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
-        return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
+        if idx == 3:
+            return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
+        return None
 
     def on_condition_changed(self):
         cfg = self.current_condition_config()
-        self.y_axis_combo.setCurrentText(cfg["y_col"])
+        if cfg is None:
+            self.condition_intercept = None
+            self.update_plot()
+            return
         if self.df is not None and len(self.df):
-            rho = pd.to_numeric(self.df["Density_kg_m3"], errors="coerce")
-            if self.condition_combo.currentIndex() == 0:
+            if self.condition_combo.currentIndex() == 1:
                 idx = pd.to_numeric(self.df["E_over_rho"], errors="coerce")
-            elif self.condition_combo.currentIndex() == 1:
+            elif self.condition_combo.currentIndex() == 2:
                 idx = pd.to_numeric(self.df["Strength_over_rho"], errors="coerce")
             else:
                 idx = pd.to_numeric(self.df["SqrtE_over_rho"], errors="coerce")
@@ -194,16 +182,18 @@ class AshbyDiagramWindow(QMainWindow):
         lx = np.log10(x[mask])
         ly = np.log10(y[mask])
 
-        if self.condition_intercept is None:
-            ratios = ly - cfg["m"] * lx
-            self.condition_intercept = float(np.nanmedian(ratios))
-
-        line_vals = cfg["m"] * lx + self.condition_intercept
-        high_side = self.preference_combo.currentIndex() == 0
-        if high_side:
-            cond_mask = ly >= line_vals
+        if cfg is not None:
+            if self.condition_intercept is None:
+                ratios = ly - cfg["m"] * lx
+                self.condition_intercept = float(np.nanmedian(ratios))
+            line_vals = cfg["m"] * lx + self.condition_intercept
+            high_side = self.preference_combo.currentIndex() == 0
+            if high_side:
+                cond_mask = ly >= line_vals
+            else:
+                cond_mask = ly <= line_vals
         else:
-            cond_mask = ly <= line_vals
+            cond_mask = pd.Series(True, index=lx.index)
 
         final_mask = pd.Series(False, index=df.index)
         final_mask.loc[mask.index[mask]] = cond_mask.values
@@ -231,8 +221,9 @@ class AshbyDiagramWindow(QMainWindow):
         if not isinstance(hull, Polygon):
             return None
         minx, miny, maxx, maxy = hull.bounds
-        radius = max((maxx - minx), (maxy - miny)) * 0.08
-        rounded = hull.buffer(radius).buffer(-radius)
+        radius = max((maxx - minx), (maxy - miny)) * 0.14
+        radius = max(radius, 0.02)
+        rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
         if rounded.is_empty:
             rounded = hull
         coords = np.array(rounded.exterior.coords)
@@ -245,7 +236,7 @@ class AshbyDiagramWindow(QMainWindow):
         angles = np.linspace(0, 2 * np.pi, 7)[:-1]
         points = [(logx + r * np.cos(a), logy + r * np.sin(a)) for a in angles]
         poly = Polygon(points)
-        rounded = poly.buffer(r * 0.35).buffer(-r * 0.35)
+        rounded = poly.buffer(r * 0.55, join_style=1).buffer(-r * 0.55, join_style=1)
         coords = np.array(rounded.exterior.coords)
         coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
         return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor="white", alpha=0.85, linewidth=0.5, zorder=4)
@@ -253,10 +244,9 @@ class AshbyDiagramWindow(QMainWindow):
     def update_plot(self):
         if self.df is None:
             return
-        x_col = self.x_axis_combo.currentText()
-        y_col = self.y_axis_combo.currentText()
-        if not x_col or not y_col:
-            return
+        x_col = "Density_kg_m3"
+        cfg = self.current_condition_config()
+        y_col = cfg["y_col"] if cfg is not None else "Youngs_Modulus_GPa"
 
         x, y, suitable_mask, valid_mask = self.build_mask(self.df, x_col, y_col)
         valid_df = self.df[valid_mask]
@@ -266,14 +256,38 @@ class AshbyDiagramWindow(QMainWindow):
         ax.set_xscale("log")
         ax.set_yscale("log")
 
-        group_colors = ["#7F8CFF", "#FF9F6E", "#8ED081", "#D68CFF", "#F2D16B"]
+        group_colors = ["#7F8CFF", "#FF9F6E", "#8ED081", "#D68CFF", "#F2D16B", "#5BB4FF", "#E798F2", "#A4DE6C"]
+        subgroup_color = "#69A7FF"
+
         for i, (gname, gdf) in enumerate(valid_df.groupby("group_name", dropna=False)):
+            group_ok = bool(suitable_mask.loc[gdf.index].any())
+            group_alpha = 0.23 if group_ok else 0.08
             pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
-            patch = self.rounded_patch_from_log_points(pts, color=group_colors[i % len(group_colors)], alpha=0.22, lw=1.8, zorder=1)
+            patch = self.rounded_patch_from_log_points(
+                pts,
+                color=group_colors[i % len(group_colors)],
+                alpha=group_alpha,
+                lw=2.0 if group_ok else 1.0,
+                zorder=0.5,
+            )
             if patch is not None:
                 ax.add_patch(patch)
                 center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
-                ax.text(center[0], center[1], str(gname), fontsize=9, weight="bold", ha="center", va="center", zorder=5)
+                ax.text(center[0], center[1], str(gname), fontsize=9, weight="bold", ha="center", va="center", alpha=0.95 if group_ok else 0.35, zorder=5)
+
+        for sname, sdf in valid_df.groupby("subgroup_name", dropna=False):
+            sub_ok = bool(suitable_mask.loc[sdf.index].any())
+            sub_alpha = 0.2 if sub_ok else 0.06
+            pts = np.column_stack((np.log10(pd.to_numeric(sdf[x_col])), np.log10(pd.to_numeric(sdf[y_col]))))
+            spatch = self.rounded_patch_from_log_points(
+                pts,
+                color=subgroup_color,
+                alpha=sub_alpha,
+                lw=1.5 if sub_ok else 0.8,
+                zorder=1.2,
+            )
+            if spatch is not None:
+                ax.add_patch(spatch)
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
@@ -282,10 +296,12 @@ class AshbyDiagramWindow(QMainWindow):
             patch.set_alpha(0.9 if is_ok else 0.23)
             ax.add_patch(patch)
 
-        cfg = self.current_condition_config()
-        xx = np.logspace(np.log10(x[valid_mask].min()), np.log10(x[valid_mask].max()), 300)
-        yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
-        self.line_artist = ax.plot(xx, yy, color="red", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
+        if cfg is not None:
+            xx = np.logspace(np.log10(x[valid_mask].min()), np.log10(x[valid_mask].max()), 300)
+            yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
+            self.line_artist = ax.plot(xx, yy, color="red", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
+        else:
+            self.line_artist = None
 
         xmin = self.parse_optional_float(self.x_min_input)
         xmax = self.parse_optional_float(self.x_max_input)
@@ -320,19 +336,23 @@ class AshbyDiagramWindow(QMainWindow):
             bbox=dict(facecolor="white", alpha=0.92, boxstyle="round,pad=0.3"),
         )
 
-        line_val = cfg["from_b"](self.condition_intercept)
+        if cfg is not None and self.condition_intercept is not None:
+            line_val = cfg["from_b"](self.condition_intercept)
+            line_info = f"Линия {cfg['label']} = {line_val:.4g}\n(можно двигать мышью вверх/вниз и колесом)"
+        else:
+            line_info = "Условие пока не выбрано"
         self.info_label.setText(
             f"Материалов: {len(self.df)}\n"
             f"Подходящих: {len(suitable_df)}\n"
-            f"Линия {cfg['label']} = {line_val:.4g}\n"
-            f"(можно двигать мышью вверх/вниз и колесом)"
+            f"{line_info}"
         )
 
         ax.set_xlabel(x_col)
         ax.set_ylabel(y_col)
         ax.set_title("Ashby диаграмма (логарифмический масштаб)")
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
-        ax.legend(loc="lower left")
+        if self.line_artist is not None:
+            ax.legend(loc="lower left")
         self.figure.tight_layout()
         self.canvas.draw_idle()
 
@@ -340,6 +360,8 @@ class AshbyDiagramWindow(QMainWindow):
         if y_data is None or y_data <= 0 or x_reference <= 0:
             return
         cfg = self.current_condition_config()
+        if cfg is None:
+            return
         self.condition_intercept = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
         self.update_plot()
 
