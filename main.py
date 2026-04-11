@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from shapely.geometry import MultiPoint, Point, Polygon
+from shapely.geometry import LineString, MultiPoint, Point, Polygon
 
 
 class AshbyDiagramWindow(QMainWindow):
@@ -232,17 +232,29 @@ class AshbyDiagramWindow(QMainWindow):
         return x, y, final_mask, mask
 
     def rounded_patch_from_log_points(self, points_log, color, alpha, lw=1.2, zorder=2):
-        if len(points_log) < 3:
+        if len(points_log) == 0:
             return None
-        hull = MultiPoint(points_log).convex_hull
-        if not isinstance(hull, Polygon):
-            return None
-        minx, miny, maxx, maxy = hull.bounds
-        radius = max((maxx - minx), (maxy - miny)) * 0.14
-        radius = max(radius, 0.02)
-        rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
+
+        if len(points_log) == 1:
+            geom = Point(points_log[0])
+            radius = 0.04
+            rounded = geom.buffer(radius, join_style=1)
+        elif len(points_log) == 2:
+            geom = LineString(points_log)
+            seg = np.linalg.norm(np.array(points_log[0]) - np.array(points_log[1]))
+            radius = max(seg * 0.18, 0.03)
+            rounded = geom.buffer(radius, cap_style=1, join_style=1)
+        else:
+            hull = MultiPoint(points_log).convex_hull
+            if not isinstance(hull, Polygon):
+                return None
+            minx, miny, maxx, maxy = hull.bounds
+            radius = max((maxx - minx), (maxy - miny)) * 0.14
+            radius = max(radius, 0.02)
+            rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
+
         if rounded.is_empty:
-            rounded = hull
+            return None
         if rounded.geom_type == "MultiPolygon":
             rounded = max(rounded.geoms, key=lambda g: g.area)
         coords = np.array(rounded.exterior.coords)
