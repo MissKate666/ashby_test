@@ -39,6 +39,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.line_artist = None
         self.hover_annotation = None
         self.material_artists = []
+        self.material_points = []
         self.last_suitable_df = pd.DataFrame()
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
@@ -98,6 +99,16 @@ class AshbyDiagramWindow(QMainWindow):
         self.preview_btn = QPushButton("Предварительный просмотр")
         self.preview_btn.clicked.connect(self.open_preview)
         panel_layout.addWidget(self.preview_btn)
+
+        zoom_row = QHBoxLayout()
+        self.zoom_in_btn = QPushButton("+")
+        self.zoom_out_btn = QPushButton("-")
+        self.zoom_in_btn.clicked.connect(lambda: self.zoom_plot(0.85))
+        self.zoom_out_btn.clicked.connect(lambda: self.zoom_plot(1.18))
+        zoom_row.addWidget(QLabel("Масштаб:"))
+        zoom_row.addWidget(self.zoom_in_btn)
+        zoom_row.addWidget(self.zoom_out_btn)
+        panel_layout.addLayout(zoom_row)
 
         self.info_label = QLabel("Данные не загружены")
         self.info_label.setWordWrap(True)
@@ -289,6 +300,8 @@ class AshbyDiagramWindow(QMainWindow):
         ax.set_xscale("log")
         ax.set_yscale("log")
         self.material_artists = []
+        self.material_points = []
+        self.hover_annotation = None
 
         x_vals = pd.to_numeric(valid_df[x_col], errors="coerce")
         y_vals = pd.to_numeric(valid_df[y_col], errors="coerce")
@@ -296,10 +309,12 @@ class AshbyDiagramWindow(QMainWindow):
         y_vals = y_vals[(y_vals > 0) & np.isfinite(y_vals)]
         x_lo, x_hi = float(x_vals.min()), float(x_vals.max())
         y_lo, y_hi = float(y_vals.min()), float(y_vals.max())
-        x_margin = 10 ** 0.08
-        y_margin = 10 ** 0.08
+        x_margin = 10 ** 0.16
+        y_margin = 10 ** 0.16
         x_lim = (x_lo / x_margin, x_hi * x_margin)
         y_lim = (y_lo / y_margin, y_hi * y_margin)
+        label_points = []
+        group_bounds = []
 
         group_colors = ["#7F8CFF", "#FF9F6E", "#8ED081", "#D68CFF", "#F2D16B", "#5BB4FF", "#E798F2", "#A4DE6C"]
         subgroup_color = "#69A7FF"
@@ -323,8 +338,12 @@ class AshbyDiagramWindow(QMainWindow):
             )
             if patch is not None:
                 ax.add_patch(patch)
+                verts = patch.get_xy()
+                group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
                 center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
-                ax.text(center[0], center[1], str(gname), fontsize=9, weight="bold", ha="center", va="center", alpha=0.95 if group_ok else 0.35, zorder=5)
+                self.place_non_overlapping_label(
+                    ax, center[0], center[1], str(gname), label_points, fontsize=9, weight="bold", alpha=0.95 if group_ok else 0.35, zorder=5
+                )
 
         for sname, sdf in valid_df.groupby("subgroup_name", dropna=False):
             sub_ok = bool(suitable_mask.loc[sdf.index].any())
@@ -340,15 +359,8 @@ class AshbyDiagramWindow(QMainWindow):
             if spatch is not None:
                 ax.add_patch(spatch)
                 s_center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
-                ax.text(
-                    s_center[0],
-                    s_center[1],
-                    str(sname),
-                    fontsize=7,
-                    ha="center",
-                    va="center",
-                    alpha=0.8 if sub_ok else 0.35,
-                    zorder=5,
+                self.place_non_overlapping_label(
+                    ax, s_center[0], s_center[1], str(sname), label_points, fontsize=7, weight="normal", alpha=0.8 if sub_ok else 0.35, zorder=5
                 )
 
         for idx, row in valid_df.iterrows():
@@ -358,6 +370,15 @@ class AshbyDiagramWindow(QMainWindow):
             patch.set_alpha(0.9 if is_ok else 0.23)
             ax.add_patch(patch)
             self.material_artists.append((patch, str(row.get("material_name", "Material"))))
+            self.material_points.append((float(row[x_col]), float(row[y_col]), str(row.get("material_name", "Material"))))
+
+        if group_bounds:
+            gx0 = min(b[0] for b in group_bounds)
+            gx1 = max(b[1] for b in group_bounds)
+            gy0 = min(b[2] for b in group_bounds)
+            gy1 = max(b[3] for b in group_bounds)
+            x_lim = (min(x_lim[0], gx0 / (10 ** 0.06)), max(x_lim[1], gx1 * (10 ** 0.06)))
+            y_lim = (min(y_lim[0], gy0 / (10 ** 0.06)), max(y_lim[1], gy1 * (10 ** 0.06)))
 
         if cfg is not None:
             xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
@@ -483,9 +504,44 @@ class AshbyDiagramWindow(QMainWindow):
                 self.hover_annotation.set_visible(True)
                 found = True
                 break
+        if not found and event.xdata and event.ydata and self.material_points:
+            lx, ly = np.log10(event.xdata), np.log10(event.ydata)
+            nearest = min(
+                self.material_points,
+                key=lambda p: (np.log10(p[0]) - lx) ** 2 + (np.log10(p[1]) - ly) ** 2,
+            )
+            dist = ((np.log10(nearest[0]) - lx) ** 2 + (np.log10(nearest[1]) - ly) ** 2) ** 0.5
+            if dist < 0.06:
+                self.hover_annotation.xy = (nearest[0], nearest[1])
+                self.hover_annotation.set_text(nearest[2])
+                self.hover_annotation.set_visible(True)
+                found = True
         if not found and self.hover_annotation.get_visible():
             self.hover_annotation.set_visible(False)
         self.canvas.draw_idle()
+
+    def place_non_overlapping_label(self, ax, x, y, text, existing_points, fontsize=8, weight="normal", alpha=0.8, zorder=5):
+        lx, ly = np.log10(x), np.log10(y)
+        min_dist = 0.08
+        tries = 0
+        while tries < 7 and any(np.hypot(lx - ex, ly - ey) < min_dist for ex, ey in existing_points):
+            ly += 0.035
+            tries += 1
+        existing_points.append((lx, ly))
+        ax.text(10 ** lx, 10 ** ly, text, fontsize=fontsize, weight=weight, ha="center", va="center", alpha=alpha, zorder=zorder)
+
+    def zoom_plot(self, factor):
+        if self.figure.axes:
+            ax = self.figure.axes[0]
+            x0, x1 = ax.get_xlim()
+            y0, y1 = ax.get_ylim()
+            cx = np.sqrt(x0 * x1)
+            cy = np.sqrt(y0 * y1)
+            hx = (np.log10(x1) - np.log10(x0)) * 0.5 * factor
+            hy = (np.log10(y1) - np.log10(y0)) * 0.5 * factor
+            ax.set_xlim(10 ** (np.log10(cx) - hx), 10 ** (np.log10(cx) + hx))
+            ax.set_ylim(10 ** (np.log10(cy) - hy), 10 ** (np.log10(cy) + hy))
+            self.canvas.draw_idle()
 
     def open_preview(self):
         if self.last_suitable_df is None or self.last_suitable_df.empty:
