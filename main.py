@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.patches import Polygon as MplPolygon
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -121,7 +122,7 @@ class AshbyDiagramWindow(QMainWindow):
         plot_layout = QVBoxLayout(plot_panel)
         self.counter_label = QLabel("Подходящих материалов: 0")
         self.counter_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        plot_layout.addWidget(self.counter_label, alignment=0x0002)  # Qt.AlignHCenter
+        plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
         self.figure = plt.figure(figsize=(12, 8))
         self.canvas = FigureCanvas(self.figure)
         self.toolbar = NavigationToolbar(self.canvas, self)
