@@ -40,6 +40,8 @@ class AshbyDiagramWindow(QMainWindow):
         self.hover_annotation = None
         self.material_artists = []
         self.material_points = []
+        self.panning = False
+        self.pan_start = None
         self.last_suitable_df = pd.DataFrame()
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
@@ -117,6 +119,9 @@ class AshbyDiagramWindow(QMainWindow):
 
         plot_panel = QWidget()
         plot_layout = QVBoxLayout(plot_panel)
+        self.counter_label = QLabel("Подходящих материалов: 0")
+        self.counter_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        plot_layout.addWidget(self.counter_label, alignment=0x0002)  # Qt.AlignHCenter
         self.figure = plt.figure(figsize=(12, 8))
         self.canvas = FigureCanvas(self.figure)
         self.toolbar = NavigationToolbar(self.canvas, self)
@@ -130,6 +135,17 @@ class AshbyDiagramWindow(QMainWindow):
         self.canvas.mpl_connect("button_release_event", self.on_release)
         self.canvas.mpl_connect("motion_notify_event", self.on_motion)
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
+
+    @staticmethod
+    def lighten_color(hex_color, factor=0.65):
+        hex_color = hex_color.lstrip("#")
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        r = int(r + (255 - r) * factor)
+        g = int(g + (255 - g) * factor)
+        b = int(b + (255 - b) * factor)
+        return f"#{r:02X}{g:02X}{b:02X}"
 
     def load_default_data(self):
         try:
@@ -316,13 +332,14 @@ class AshbyDiagramWindow(QMainWindow):
         label_points = []
         group_bounds = []
 
-        group_colors = ["#7F8CFF", "#FF9F6E", "#8ED081", "#D68CFF", "#F2D16B", "#5BB4FF", "#E798F2", "#A4DE6C"]
-        subgroup_color = "#69A7FF"
+        group_colors = ["#3B5BDB", "#D9480F", "#2B8A3E", "#862E9C", "#B08900", "#0B7285", "#C2255C", "#5C940D"]
+        group_color_by_id = {}
 
         group_rows = self.groups_df.itertuples(index=False) if self.groups_df is not None else []
         for i, group_row in enumerate(group_rows):
             gname = group_row.group_name
             gid = group_row.group_id
+            group_color_by_id[gid] = group_colors[i % len(group_colors)]
             gdf = valid_df[valid_df["group_id"] == gid]
             if gdf.empty:
                 continue
@@ -331,7 +348,7 @@ class AshbyDiagramWindow(QMainWindow):
             pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
             patch = self.rounded_patch_from_log_points(
                 pts,
-                color=group_colors[i % len(group_colors)],
+                color=group_color_by_id[gid],
                 alpha=group_alpha,
                 lw=2.0 if group_ok else 1.0,
                 zorder=0.5,
@@ -349,6 +366,9 @@ class AshbyDiagramWindow(QMainWindow):
             sub_ok = bool(suitable_mask.loc[sdf.index].any())
             sub_alpha = 0.2 if sub_ok else 0.06
             pts = np.column_stack((np.log10(pd.to_numeric(sdf[x_col])), np.log10(pd.to_numeric(sdf[y_col]))))
+            subgroup_group_id = sdf["group_id"].iloc[0] if len(sdf) else None
+            base_group_color = group_color_by_id.get(subgroup_group_id, "#3B5BDB")
+            subgroup_color = self.lighten_color(base_group_color, factor=0.68)
             spatch = self.rounded_patch_from_log_points(
                 pts,
                 color=subgroup_color,
@@ -365,9 +385,9 @@ class AshbyDiagramWindow(QMainWindow):
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
-            color = "#1976D2" if is_ok else "#9E9E9E"
+            color = "#111111"
             patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
-            patch.set_alpha(0.9 if is_ok else 0.23)
+            patch.set_alpha(0.9 if is_ok else 0.2)
             ax.add_patch(patch)
             self.material_artists.append((patch, str(row.get("material_name", "Material"))))
             self.material_points.append((float(row[x_col]), float(row[y_col]), str(row.get("material_name", "Material"))))
@@ -409,16 +429,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         suitable_df = self.df[suitable_mask].copy()
         self.last_suitable_df = suitable_df
-        ax.text(
-            0.98,
-            0.98,
-            f"Подходящих материалов: {len(suitable_df)}",
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=11,
-            bbox=dict(facecolor="white", alpha=0.92, boxstyle="round,pad=0.3"),
-        )
+        self.counter_label.setText(f"Подходящих материалов: {len(suitable_df)}")
 
         if cfg is not None and self.condition_intercept is not None:
             line_val = cfg["from_b"](self.condition_intercept)
@@ -457,6 +468,10 @@ class AshbyDiagramWindow(QMainWindow):
         self.update_plot()
 
     def on_press(self, event):
+        if event.button == 2 and event.inaxes is not None:
+            self.panning = True
+            self.pan_start = (event.xdata, event.ydata, event.inaxes.get_xlim(), event.inaxes.get_ylim())
+            return
         if event.inaxes is None or self.line_artist is None:
             return
         contains, _ = self.line_artist.contains(event)
@@ -471,10 +486,23 @@ class AshbyDiagramWindow(QMainWindow):
             x_ref = np.sqrt(xlim[0] * xlim[1])
             self.update_line_from_y(event.ydata, x_ref)
             return
+        if self.panning and self.pan_start is not None and event.xdata and event.ydata:
+            start_x, start_y, xlim0, ylim0 = self.pan_start
+            if start_x > 0 and start_y > 0:
+                dx = np.log10(event.xdata) - np.log10(start_x)
+                dy = np.log10(event.ydata) - np.log10(start_y)
+                new_xlim = (10 ** (np.log10(xlim0[0]) - dx), 10 ** (np.log10(xlim0[1]) - dx))
+                new_ylim = (10 ** (np.log10(ylim0[0]) - dy), 10 ** (np.log10(ylim0[1]) - dy))
+                event.inaxes.set_xlim(*new_xlim)
+                event.inaxes.set_ylim(*new_ylim)
+                self.canvas.draw_idle()
+            return
         self.update_material_hover(event)
 
     def on_release(self, event):
         self.dragging_line = False
+        self.panning = False
+        self.pan_start = None
 
     def on_scroll(self, event):
         if event.inaxes is None:
