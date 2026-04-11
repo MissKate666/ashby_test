@@ -32,6 +32,7 @@ class AshbyDiagramWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.df = None
+        self.groups_df = None
         self.group_map = None
         self.dragging_line = False
         self.condition_intercept = None
@@ -127,7 +128,23 @@ class AshbyDiagramWindow(QMainWindow):
             subgroups.columns = subgroups.columns.str.strip()
             materials.columns = materials.columns.str.strip()
 
-            self.df = materials.merge(subgroups, on="subgroup_id", how="left").merge(groups, on="group_id", how="left")
+            for frame, col in [(groups, "group_id"), (subgroups, "subgroup_id"), (subgroups, "group_id"), (materials, "subgroup_id")]:
+                frame[col] = pd.to_numeric(frame[col], errors="coerce").astype("Int64")
+
+            self.groups_df = groups.sort_values("group_id").reset_index(drop=True)
+            merged = materials.merge(subgroups, on="subgroup_id", how="inner", validate="many_to_one")
+            merged = merged.merge(groups, on="group_id", how="inner", validate="many_to_one")
+
+            if merged["group_id"].isna().any() or merged["group_name"].isna().any():
+                raise ValueError("Обнаружены материалы без группы после связывания таблиц.")
+
+            found_groups = set(merged["group_id"].dropna().astype(int).unique().tolist())
+            expected_groups = set(self.groups_df["group_id"].dropna().astype(int).tolist())
+            if found_groups != expected_groups:
+                missing = sorted(expected_groups - found_groups)
+                raise ValueError(f"В диаграмме отсутствуют обязательные группы: {missing}")
+
+            self.df = merged.reset_index(drop=True)
 
             self.on_condition_changed()
             self.info_label.setText(f"Загружено материалов: {len(self.df)}")
@@ -226,6 +243,8 @@ class AshbyDiagramWindow(QMainWindow):
         rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
         if rounded.is_empty:
             rounded = hull
+        if rounded.geom_type == "MultiPolygon":
+            rounded = max(rounded.geoms, key=lambda g: g.area)
         coords = np.array(rounded.exterior.coords)
         coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
         return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor=color, alpha=alpha, linewidth=lw, zorder=zorder)
@@ -259,7 +278,13 @@ class AshbyDiagramWindow(QMainWindow):
         group_colors = ["#7F8CFF", "#FF9F6E", "#8ED081", "#D68CFF", "#F2D16B", "#5BB4FF", "#E798F2", "#A4DE6C"]
         subgroup_color = "#69A7FF"
 
-        for i, (gname, gdf) in enumerate(valid_df.groupby("group_name", dropna=False)):
+        group_rows = self.groups_df.itertuples(index=False) if self.groups_df is not None else []
+        for i, group_row in enumerate(group_rows):
+            gname = group_row.group_name
+            gid = group_row.group_id
+            gdf = valid_df[valid_df["group_id"] == gid]
+            if gdf.empty:
+                continue
             group_ok = bool(suitable_mask.loc[gdf.index].any())
             group_alpha = 0.23 if group_ok else 0.08
             pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
@@ -353,7 +378,7 @@ class AshbyDiagramWindow(QMainWindow):
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
         if self.line_artist is not None:
             ax.legend(loc="lower left")
-        self.figure.tight_layout()
+        self.figure.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.1)
         self.canvas.draw_idle()
 
     def update_line_from_y(self, y_data, x_reference):
