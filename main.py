@@ -37,6 +37,8 @@ class AshbyDiagramWindow(QMainWindow):
         self.dragging_line = False
         self.condition_intercept = None
         self.line_artist = None
+        self.hover_annotation = None
+        self.material_artists = []
         self.last_suitable_df = pd.DataFrame()
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
@@ -286,6 +288,18 @@ class AshbyDiagramWindow(QMainWindow):
         ax = self.figure.add_subplot(111)
         ax.set_xscale("log")
         ax.set_yscale("log")
+        self.material_artists = []
+
+        x_vals = pd.to_numeric(valid_df[x_col], errors="coerce")
+        y_vals = pd.to_numeric(valid_df[y_col], errors="coerce")
+        x_vals = x_vals[(x_vals > 0) & np.isfinite(x_vals)]
+        y_vals = y_vals[(y_vals > 0) & np.isfinite(y_vals)]
+        x_lo, x_hi = float(x_vals.min()), float(x_vals.max())
+        y_lo, y_hi = float(y_vals.min()), float(y_vals.max())
+        x_margin = 10 ** 0.08
+        y_margin = 10 ** 0.08
+        x_lim = (x_lo / x_margin, x_hi * x_margin)
+        y_lim = (y_lo / y_margin, y_hi * y_margin)
 
         group_colors = ["#7F8CFF", "#FF9F6E", "#8ED081", "#D68CFF", "#F2D16B", "#5BB4FF", "#E798F2", "#A4DE6C"]
         subgroup_color = "#69A7FF"
@@ -325,6 +339,17 @@ class AshbyDiagramWindow(QMainWindow):
             )
             if spatch is not None:
                 ax.add_patch(spatch)
+                s_center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
+                ax.text(
+                    s_center[0],
+                    s_center[1],
+                    str(sname),
+                    fontsize=7,
+                    ha="center",
+                    va="center",
+                    alpha=0.8 if sub_ok else 0.35,
+                    zorder=5,
+                )
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
@@ -332,9 +357,10 @@ class AshbyDiagramWindow(QMainWindow):
             patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
             patch.set_alpha(0.9 if is_ok else 0.23)
             ax.add_patch(patch)
+            self.material_artists.append((patch, str(row.get("material_name", "Material"))))
 
         if cfg is not None:
-            xx = np.logspace(np.log10(x[valid_mask].min()), np.log10(x[valid_mask].max()), 300)
+            xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
             yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
             self.line_artist = ax.plot(xx, yy, color="red", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
         else:
@@ -384,8 +410,15 @@ class AshbyDiagramWindow(QMainWindow):
             f"{line_info}"
         )
 
-        ax.set_xlabel(x_col)
-        ax.set_ylabel(y_col)
+        ax.set_xlim(*x_lim)
+        ax.set_ylim(*y_lim)
+        ax.set_xlabel("ρ — Density_kg_m3 (kg/m³)")
+        if y_col == "Youngs_Modulus_GPa":
+            ax.set_ylabel("E — Youngs_Modulus_GPa (GPa)")
+        elif y_col == "Strength_MPa":
+            ax.set_ylabel("σ — Strength_MPa (MPa)")
+        else:
+            ax.set_ylabel(y_col)
         ax.set_title("Ashby диаграмма (логарифмический масштаб)")
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
         if self.line_artist is not None:
@@ -410,11 +443,14 @@ class AshbyDiagramWindow(QMainWindow):
             self.dragging_line = True
 
     def on_motion(self, event):
-        if not self.dragging_line or event.inaxes is None:
+        if event.inaxes is None:
             return
-        xlim = event.inaxes.get_xlim()
-        x_ref = np.sqrt(xlim[0] * xlim[1])
-        self.update_line_from_y(event.ydata, x_ref)
+        if self.dragging_line:
+            xlim = event.inaxes.get_xlim()
+            x_ref = np.sqrt(xlim[0] * xlim[1])
+            self.update_line_from_y(event.ydata, x_ref)
+            return
+        self.update_material_hover(event)
 
     def on_release(self, event):
         self.dragging_line = False
@@ -425,6 +461,31 @@ class AshbyDiagramWindow(QMainWindow):
         step = 0.04 if event.button == "up" else -0.04
         self.condition_intercept = (self.condition_intercept or 0.0) + step
         self.update_plot()
+
+    def update_material_hover(self, event):
+        if self.hover_annotation is None:
+            self.hover_annotation = event.inaxes.annotate(
+                "",
+                xy=(0, 0),
+                xytext=(10, 10),
+                textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.9),
+                fontsize=8,
+            )
+            self.hover_annotation.set_visible(False)
+
+        found = False
+        for patch, name in self.material_artists:
+            contains, _ = patch.contains(event)
+            if contains:
+                self.hover_annotation.xy = (event.xdata, event.ydata)
+                self.hover_annotation.set_text(name)
+                self.hover_annotation.set_visible(True)
+                found = True
+                break
+        if not found and self.hover_annotation.get_visible():
+            self.hover_annotation.set_visible(False)
+        self.canvas.draw_idle()
 
     def open_preview(self):
         if self.last_suitable_df is None or self.last_suitable_df.empty:
