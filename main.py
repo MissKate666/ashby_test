@@ -1,11 +1,11 @@
 import sys
+import subprocess
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.patches import Polygon as MplPolygon
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -43,6 +44,9 @@ class AshbyDiagramWindow(QMainWindow):
         self.material_points = []
         self.panning = False
         self.pan_start = None
+        self.invalid_bounds_notified = False
+        self.translator = self.build_translator()
+        self.translation_cache = {}
         self.last_suitable_df = pd.DataFrame()
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
@@ -123,11 +127,12 @@ class AshbyDiagramWindow(QMainWindow):
         self.counter_label = QLabel("Подходящих материалов: 0")
         self.counter_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
-        self.figure = plt.figure(figsize=(12, 8))
+        self.figure = plt.figure()
         self.canvas = FigureCanvas(self.figure)
-        self.toolbar = NavigationToolbar(self.canvas, self)
-        plot_layout.addWidget(self.toolbar)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.updateGeometry()
         plot_layout.addWidget(self.canvas)
+        plot_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         main_layout.addWidget(panel)
         main_layout.addWidget(plot_panel, stretch=1)
@@ -174,13 +179,28 @@ class AshbyDiagramWindow(QMainWindow):
                 missing = sorted(expected_groups - found_groups)
                 raise ValueError(f"В диаграмме отсутствуют обязательные группы: {missing}")
 
-            self.df = merged.reset_index(drop=True)
+            if self.translator is None:
+                raise RuntimeError("Не удалось инициализировать библиотеку перевода. Проверьте подключение к интернету и доступ к pip.")
 
-            self.on_condition_changed()
+            self.groups_df["group_name"] = self.translate_series_to_russian(self.groups_df["group_name"])
+            for col in ["group_name", "subgroup_name", "material_name"]:
+                if col in merged.columns:
+                    merged[col] = self.translate_series_to_russian(merged[col])
+
+            self.df = merged.reset_index(drop=True)
             self.info_label.setText(f"Загружено материалов: {len(self.df)}")
-            self.update_plot()
+            self.clear_plot_placeholder("Выберите критерий, чтобы построить диаграмму")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить данные:\n{e}")
+
+    def clear_plot_placeholder(self, message):
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        ax.axis("off")
+        ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12, color="#666666", transform=ax.transAxes)
+        self.counter_label.setText("Подходящих материалов: 0")
+        self.last_suitable_df = pd.DataFrame()
+        self.canvas.draw_idle()
 
     def current_condition_config(self):
         idx = self.condition_combo.currentIndex()
@@ -219,6 +239,116 @@ class AshbyDiagramWindow(QMainWindow):
             return float(text)
         except ValueError:
             return None
+
+    def translate_series_to_russian(self, series: pd.Series) -> pd.Series:
+        if self.translator is None:
+            return series
+
+        def translate_value(value):
+            if pd.isna(value):
+                return value
+            text = str(value).strip()
+            if not text:
+                return value
+            if text in self.translation_cache:
+                return self.translation_cache[text]
+            try:
+                translated = self.translator.translate(text)
+                self.translation_cache[text] = translated if translated else text
+                return self.translation_cache[text]
+            except Exception:
+                self.translation_cache[text] = text
+                return text
+
+        return series.map(translate_value)
+
+    def build_translator(self):
+        translator = self.build_deep_translator()
+        if translator is not None:
+            return translator
+        return self.build_googletrans_translator()
+
+    @staticmethod
+    def install_package(package_name):
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", package_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception:
+            return False
+
+    def build_deep_translator(self):
+        try:
+            from deep_translator import GoogleTranslator, MyMemoryTranslator
+        except ImportError:
+            if not self.install_package("deep-translator"):
+                return None
+            try:
+                from deep_translator import GoogleTranslator, MyMemoryTranslator
+            except Exception:
+                return None
+
+        backends = [
+            GoogleTranslator(source="auto", target="ru"),
+            MyMemoryTranslator(source="en-US", target="ru-RU"),
+        ]
+        for backend in backends:
+            try:
+                if backend.translate("Steel"):
+                    return backend
+            except Exception:
+                continue
+        return None
+
+    def build_googletrans_translator(self):
+        try:
+            from googletrans import Translator as GoogleTransTranslator
+        except ImportError:
+            if not self.install_package("googletrans==4.0.0-rc1"):
+                return None
+            try:
+                from googletrans import Translator as GoogleTransTranslator
+            except Exception:
+                return None
+
+        class GoogleTransAdapter:
+            def __init__(self):
+                self.translator = GoogleTransTranslator()
+
+            def translate(self, text):
+                return self.translator.translate(text, dest="ru").text
+
+        try:
+            adapter = GoogleTransAdapter()
+            if adapter.translate("Steel"):
+                return adapter
+        except Exception:
+            return None
+        return None
+
+    def validate_axis_bounds(self):
+        xmin = self.parse_optional_float(self.x_min_input)
+        xmax = self.parse_optional_float(self.x_max_input)
+        ymin = self.parse_optional_float(self.y_min_input)
+        ymax = self.parse_optional_float(self.y_max_input)
+
+        errors = []
+        if xmin is not None and xmax is not None and xmin > xmax:
+            errors.append("X min не может быть больше X max.")
+        if ymin is not None and ymax is not None and ymin > ymax:
+            errors.append("Y min не может быть больше Y max.")
+
+        if errors:
+            if not self.invalid_bounds_notified:
+                QMessageBox.warning(self, "Некорректные границы осей", "\n".join(errors))
+                self.invalid_bounds_notified = True
+            return None
+
+        self.invalid_bounds_notified = False
+        return xmin, xmax, ymin, ymax
 
     def build_mask(self, df, x_col, y_col):
         x = pd.to_numeric(df[x_col], errors="coerce")
@@ -305,6 +435,10 @@ class AshbyDiagramWindow(QMainWindow):
     def update_plot(self):
         if self.df is None:
             return
+        limits = self.validate_axis_bounds()
+        if limits is None:
+            return
+
         x_col = "Density_kg_m3"
         cfg = self.current_condition_config()
         y_col = cfg["y_col"] if cfg is not None else "Youngs_Modulus_GPa"
@@ -408,18 +542,19 @@ class AshbyDiagramWindow(QMainWindow):
         else:
             self.line_artist = None
 
-        xmin = self.parse_optional_float(self.x_min_input)
-        xmax = self.parse_optional_float(self.x_max_input)
-        ymin = self.parse_optional_float(self.y_min_input)
-        ymax = self.parse_optional_float(self.y_max_input)
+        xmin, xmax, ymin, ymax = limits
         if xmin is not None:
             ax.axvline(xmin, color="#4CAF50", linestyle="--", linewidth=1.3)
+            ax.text(xmin, 0.98, f"X min = {xmin:g}", transform=ax.get_xaxis_transform(), color="#2E7D32", fontsize=9, ha="left", va="top")
         if xmax is not None:
             ax.axvline(xmax, color="#4CAF50", linestyle="--", linewidth=1.3)
+            ax.text(xmax, 0.92, f"X max = {xmax:g}", transform=ax.get_xaxis_transform(), color="#2E7D32", fontsize=9, ha="left", va="top")
         if ymin is not None:
             ax.axhline(ymin, color="#7E57C2", linestyle="--", linewidth=1.3)
+            ax.text(0.01, ymin, f"Y min = {ymin:g}", transform=ax.get_yaxis_transform(), color="#5E35B1", fontsize=9, ha="left", va="bottom")
         if ymax is not None:
             ax.axhline(ymax, color="#7E57C2", linestyle="--", linewidth=1.3)
+            ax.text(0.01, ymax, f"Y max = {ymax:g}", transform=ax.get_yaxis_transform(), color="#5E35B1", fontsize=9, ha="left", va="top")
 
         if any(v is not None for v in [xmin, xmax, ymin, ymax]):
             xlo = xmin if xmin is not None else x[valid_mask].min()
@@ -445,13 +580,13 @@ class AshbyDiagramWindow(QMainWindow):
 
         ax.set_xlim(*x_lim)
         ax.set_ylim(*y_lim)
-        ax.set_xlabel("ρ — Density_kg_m3 (kg/m³)")
+        ax.set_xlabel("ρ — Плотность (кг/м³)")
         if y_col == "Youngs_Modulus_GPa":
-            ax.set_ylabel("E — Youngs_Modulus_GPa (GPa)")
+            ax.set_ylabel("E — Модуль Юнга (ГПа)")
         elif y_col == "Strength_MPa":
-            ax.set_ylabel("σ — Strength_MPa (MPa)")
+            ax.set_ylabel("σ — Прочность (МПа)")
         else:
-            ax.set_ylabel(y_col)
+            ax.set_ylabel("Свойство материала")
         ax.set_title("Ashby диаграмма (логарифмический масштаб)")
         ax.grid(True, which="both", linestyle="--", alpha=0.3)
         if self.line_artist is not None:
