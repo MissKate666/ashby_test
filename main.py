@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.patches import Polygon as MplPolygon
 from PyQt5.QtCore import Qt
@@ -572,7 +573,7 @@ class AshbyDiagramWindow(QMainWindow):
                 group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
                 center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
                 self.place_non_overlapping_label(
-                    ax, center[0], center[1], str(gname), label_points, fontsize=9, weight="bold", alpha=0.95 if group_ok else 0.35, zorder=5
+                    ax, center[0], center[1], str(gname), label_points, fontsize=9, weight="bold", alpha=0.95 if group_ok else 0.45, zorder=5
                 )
 
         for sname, sdf in valid_df.groupby("subgroup_name", dropna=False):
@@ -591,10 +592,11 @@ class AshbyDiagramWindow(QMainWindow):
             )
             if spatch is not None:
                 ax.add_patch(spatch)
-                s_center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
-                self.place_non_overlapping_label(
-                    ax, s_center[0], s_center[1], str(sname), label_points, fontsize=7, weight="normal", alpha=0.8 if sub_ok else 0.35, zorder=5
-                )
+                if sub_ok:
+                    s_center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
+                    self.place_non_overlapping_label(
+                        ax, s_center[0], s_center[1], str(sname), label_points, fontsize=7, weight="normal", alpha=0.85, zorder=5
+                    )
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
@@ -616,7 +618,7 @@ class AshbyDiagramWindow(QMainWindow):
         if cfg is not None:
             xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
             yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
-            self.line_artist = ax.plot(xx, yy, color="red", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
+            self.line_artist = ax.plot(xx, yy, color="#E03131", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
         else:
             self.line_artist = None
 
@@ -658,15 +660,20 @@ class AshbyDiagramWindow(QMainWindow):
 
         ax.set_xlim(*x_lim)
         ax.set_ylim(*y_lim)
-        ax.set_xlabel("ρ — Плотность (кг/м³)")
+        ax.set_xlabel("ρ — Плотность (кг/м³)", fontsize=11, color="#334155")
         if y_col == "Youngs_Modulus_GPa":
-            ax.set_ylabel("E — Модуль Юнга (ГПа)")
+            ax.set_ylabel("E — Модуль Юнга (ГПа)", fontsize=11, color="#334155")
         elif y_col == "Strength_MPa":
-            ax.set_ylabel("σ — Прочность (МПа)")
+            ax.set_ylabel("σ — Прочность (МПа)", fontsize=11, color="#334155")
         else:
-            ax.set_ylabel("Свойство материала")
-        ax.set_title("Ashby диаграмма (логарифмический масштаб)")
-        ax.grid(True, which="both", linestyle="--", alpha=0.3)
+            ax.set_ylabel("Свойство материала", fontsize=11, color="#334155")
+        ax.set_title("Ashby диаграмма (логарифмический масштаб)", fontsize=13, pad=14, color="#0F172A", weight="semibold")
+        ax.tick_params(axis="both", which="major", labelsize=10, colors="#475569")
+        ax.tick_params(axis="both", which="minor", labelsize=8, colors="#94A3B8")
+        for spine in ax.spines.values():
+            spine.set_color("#CBD5E1")
+        ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.38, color="#CBD5E1")
+        ax.grid(True, which="minor", linestyle="--", linewidth=0.55, alpha=0.22, color="#DCE3EE")
         if self.line_artist is not None:
             ax.legend(loc="lower left")
         self.figure.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.1)
@@ -763,14 +770,46 @@ class AshbyDiagramWindow(QMainWindow):
         self.canvas.draw_idle()
 
     def place_non_overlapping_label(self, ax, x, y, text, existing_points, fontsize=8, weight="normal", alpha=0.8, zorder=5):
-        lx, ly = np.log10(x), np.log10(y)
-        min_dist = 0.08
-        tries = 0
-        while tries < 7 and any(np.hypot(lx - ex, ly - ey) < min_dist for ex, ey in existing_points):
-            ly += 0.035
-            tries += 1
-        existing_points.append((lx, ly))
-        ax.text(10 ** lx, 10 ** ly, text, fontsize=fontsize, weight=weight, ha="center", va="center", alpha=alpha, zorder=zorder)
+        anchor_px = ax.transData.transform((x, y))
+        candidate_offsets = [
+            (0, 0), (0, 14), (0, -14), (14, 0), (-14, 0),
+            (12, 12), (-12, 12), (12, -12), (-12, -12),
+            (0, 24), (24, 0), (-24, 0), (0, -24),
+        ]
+        min_dist_px = max(48, fontsize * 5)
+
+        best_offset = candidate_offsets[0]
+        best_score = -1
+        for dx, dy in candidate_offsets:
+            px = (anchor_px[0] + dx, anchor_px[1] + dy)
+            if not existing_points:
+                best_offset = (dx, dy)
+                break
+            dist = min(np.hypot(px[0] - ex, px[1] - ey) for ex, ey in existing_points)
+            if dist > min_dist_px:
+                best_offset = (dx, dy)
+                break
+            if dist > best_score:
+                best_score = dist
+                best_offset = (dx, dy)
+
+        final_px = (anchor_px[0] + best_offset[0], anchor_px[1] + best_offset[1])
+        existing_points.append(final_px)
+        txt = ax.annotate(
+            text,
+            xy=(x, y),
+            xytext=best_offset,
+            textcoords="offset points",
+            fontsize=fontsize,
+            weight=weight,
+            ha="center",
+            va="center",
+            alpha=alpha,
+            color="#0F172A",
+            zorder=zorder,
+            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.72 if alpha > 0.6 else 0.45),
+        )
+        txt.set_path_effects([pe.withStroke(linewidth=1.6, foreground="white", alpha=0.9)])
 
     def zoom_plot(self, factor):
         if self.figure.axes:
