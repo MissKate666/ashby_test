@@ -176,12 +176,19 @@ class AshbyDiagramWindow(QMainWindow):
                 raise ValueError(f"В диаграмме отсутствуют обязательные группы: {missing}")
 
             self.df = merged.reset_index(drop=True)
-
-            self.on_condition_changed()
             self.info_label.setText(f"Загружено материалов: {len(self.df)}")
-            self.update_plot()
+            self.clear_plot_placeholder("Выберите критерий, чтобы построить диаграмму")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить данные:\n{e}")
+
+    def clear_plot_placeholder(self, message):
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        ax.axis("off")
+        ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12, color="#666666", transform=ax.transAxes)
+        self.counter_label.setText("Подходящих материалов: 0")
+        self.last_suitable_df = pd.DataFrame()
+        self.canvas.draw_idle()
 
     def current_condition_config(self):
         idx = self.condition_combo.currentIndex()
@@ -415,12 +422,16 @@ class AshbyDiagramWindow(QMainWindow):
         ymax = self.parse_optional_float(self.y_max_input)
         if xmin is not None:
             ax.axvline(xmin, color="#4CAF50", linestyle="--", linewidth=1.3)
+            ax.text(xmin, 0.98, f"X min = {xmin:g}", transform=ax.get_xaxis_transform(), color="#2E7D32", fontsize=9, ha="left", va="top")
         if xmax is not None:
             ax.axvline(xmax, color="#4CAF50", linestyle="--", linewidth=1.3)
+            ax.text(xmax, 0.92, f"X max = {xmax:g}", transform=ax.get_xaxis_transform(), color="#2E7D32", fontsize=9, ha="left", va="top")
         if ymin is not None:
             ax.axhline(ymin, color="#7E57C2", linestyle="--", linewidth=1.3)
+            ax.text(0.01, ymin, f"Y min = {ymin:g}", transform=ax.get_yaxis_transform(), color="#5E35B1", fontsize=9, ha="left", va="bottom")
         if ymax is not None:
             ax.axhline(ymax, color="#7E57C2", linestyle="--", linewidth=1.3)
+            ax.text(0.01, ymax, f"Y max = {ymax:g}", transform=ax.get_yaxis_transform(), color="#5E35B1", fontsize=9, ha="left", va="top")
 
         if any(v is not None for v in [xmin, xmax, ymin, ymax]):
             xlo = xmin if xmin is not None else x[valid_mask].min()
