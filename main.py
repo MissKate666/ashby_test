@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QHeaderView,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -59,14 +60,20 @@ class AshbyDiagramWindow(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("Ashby Selector")
         self.setGeometry(100, 80, 1450, 900)
+        self.apply_modern_theme()
 
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(18, 18, 18, 18)
+        main_layout.setSpacing(16)
 
         panel = QWidget()
+        panel.setObjectName("controlPanel")
         panel.setMaximumWidth(360)
         panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 16, 16, 16)
+        panel_layout.setSpacing(12)
 
         cond_group = QGroupBox("Условия")
         cond_layout = QFormLayout()
@@ -104,6 +111,7 @@ class AshbyDiagramWindow(QMainWindow):
         panel_layout.addWidget(axis_group)
 
         self.preview_btn = QPushButton("Предварительный просмотр")
+        self.preview_btn.setObjectName("primaryButton")
         self.preview_btn.clicked.connect(self.open_preview)
         panel_layout.addWidget(self.preview_btn)
 
@@ -123,12 +131,16 @@ class AshbyDiagramWindow(QMainWindow):
         panel_layout.addStretch(1)
 
         plot_panel = QWidget()
+        plot_panel.setObjectName("plotPanel")
         plot_layout = QVBoxLayout(plot_panel)
+        plot_layout.setContentsMargins(18, 16, 18, 16)
+        plot_layout.setSpacing(10)
         self.counter_label = QLabel("Подходящих материалов: 0")
         self.counter_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
-        self.figure = plt.figure()
+        self.figure = plt.figure(facecolor="#F8FAFC")
         self.canvas = FigureCanvas(self.figure)
+        self.canvas.setStyleSheet("background: #F8FAFC; border-radius: 12px;")
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.updateGeometry()
         plot_layout.addWidget(self.canvas)
@@ -141,6 +153,70 @@ class AshbyDiagramWindow(QMainWindow):
         self.canvas.mpl_connect("button_release_event", self.on_release)
         self.canvas.mpl_connect("motion_notify_event", self.on_motion)
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
+
+    def apply_modern_theme(self):
+        self.setStyleSheet(
+            """
+            QWidget {
+                background-color: #F3F6FB;
+                color: #1F2937;
+                font-size: 13px;
+                font-family: "Segoe UI", "Inter", "Roboto", sans-serif;
+            }
+            #controlPanel, #plotPanel {
+                background: #FFFFFF;
+                border: 1px solid #E5EAF2;
+                border-radius: 14px;
+            }
+            QGroupBox {
+                font-weight: 600;
+                border: 1px solid #E5EAF2;
+                border-radius: 10px;
+                margin-top: 10px;
+                padding: 10px 8px 8px 8px;
+                background: #FCFDFF;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px;
+                color: #334155;
+            }
+            QLineEdit, QComboBox {
+                border: 1px solid #D6DCE8;
+                border-radius: 8px;
+                padding: 6px 8px;
+                background: #FFFFFF;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #4C6EF5;
+            }
+            QPushButton {
+                border: 1px solid #D6DCE8;
+                border-radius: 8px;
+                padding: 7px 10px;
+                background: #FFFFFF;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #F1F5FF;
+            }
+            QPushButton:pressed {
+                background: #E4ECFF;
+            }
+            QPushButton#primaryButton {
+                background: #3B5BDB;
+                border-color: #3B5BDB;
+                color: #FFFFFF;
+            }
+            QPushButton#primaryButton:hover {
+                background: #2F4FCB;
+            }
+            QLabel {
+                background: transparent;
+            }
+            """
+        )
 
     @staticmethod
     def lighten_color(hex_color, factor=0.65):
@@ -196,6 +272,7 @@ class AshbyDiagramWindow(QMainWindow):
     def clear_plot_placeholder(self, message):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
+        ax.set_facecolor("#F8FAFC")
         ax.axis("off")
         ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12, color="#666666", transform=ax.transAxes)
         self.counter_label.setText("Подходящих материалов: 0")
@@ -448,6 +525,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
+        ax.set_facecolor("#F8FAFC")
         ax.set_xscale("log")
         ax.set_yscale("log")
         self.material_artists = []
@@ -731,6 +809,26 @@ class AshbyDiagramWindow(QMainWindow):
         layout = QVBoxLayout(dlg)
 
         table = QTableWidget()
+        table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            """
+            QTableWidget {
+                background: #FFFFFF;
+                border: 1px solid #E5EAF2;
+                gridline-color: #EEF2F7;
+                alternate-background-color: #F8FAFD;
+            }
+            QHeaderView::section {
+                background: #EEF3FF;
+                color: #1E293B;
+                padding: 6px;
+                border: none;
+                border-right: 1px solid #DFE7F3;
+                border-bottom: 1px solid #DFE7F3;
+                font-weight: 600;
+            }
+            """
+        )
         df = self.last_suitable_df[show_cols].reset_index(drop=True)
         table.setColumnCount(len(show_cols))
         table.setRowCount(len(df))
@@ -741,6 +839,7 @@ class AshbyDiagramWindow(QMainWindow):
                 table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
 
         table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(table)
         dlg.exec_()
 
