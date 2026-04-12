@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.patches import Polygon as MplPolygon
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -21,6 +20,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -123,11 +123,12 @@ class AshbyDiagramWindow(QMainWindow):
         self.counter_label = QLabel("Подходящих материалов: 0")
         self.counter_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
-        self.figure = plt.figure(figsize=(12, 8))
+        self.figure = plt.figure()
         self.canvas = FigureCanvas(self.figure)
-        self.toolbar = NavigationToolbar(self.canvas, self)
-        plot_layout.addWidget(self.toolbar)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.updateGeometry()
         plot_layout.addWidget(self.canvas)
+        plot_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         main_layout.addWidget(panel)
         main_layout.addWidget(plot_panel, stretch=1)
