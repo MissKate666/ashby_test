@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.patches import Polygon as MplPolygon
 from PyQt5.QtCore import Qt
@@ -21,6 +22,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QHeaderView,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -48,6 +50,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.translator = self.build_translator()
         self.translation_cache = {}
         self.last_suitable_df = pd.DataFrame()
+        self.group_colors = ["#3B5BDB", "#D9480F", "#2B8A3E", "#862E9C", "#B08900", "#0B7285", "#C2255C", "#5C940D"]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
             "subgroups": Path("materials_for_project/Subgroup_materials.csv"),
@@ -59,14 +62,20 @@ class AshbyDiagramWindow(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("Ashby Selector")
         self.setGeometry(100, 80, 1450, 900)
+        self.apply_modern_theme()
 
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(18, 18, 18, 18)
+        main_layout.setSpacing(16)
 
         panel = QWidget()
+        panel.setObjectName("controlPanel")
         panel.setMaximumWidth(360)
         panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 16, 16, 16)
+        panel_layout.setSpacing(12)
 
         cond_group = QGroupBox("Условия")
         cond_layout = QFormLayout()
@@ -104,6 +113,7 @@ class AshbyDiagramWindow(QMainWindow):
         panel_layout.addWidget(axis_group)
 
         self.preview_btn = QPushButton("Предварительный просмотр")
+        self.preview_btn.setObjectName("primaryButton")
         self.preview_btn.clicked.connect(self.open_preview)
         panel_layout.addWidget(self.preview_btn)
 
@@ -120,15 +130,28 @@ class AshbyDiagramWindow(QMainWindow):
         self.info_label = QLabel("Данные не загружены")
         self.info_label.setWordWrap(True)
         panel_layout.addWidget(self.info_label)
+        self.group_legend_label = QLabel("Цвета групп появятся после загрузки данных")
+        self.group_legend_label.setWordWrap(True)
+        self.group_legend_label.setStyleSheet("font-size: 15px; font-weight: 700; color: #1E293B;")
+        panel_layout.addWidget(self.group_legend_label)
+        self.group_legend_widget = QWidget()
+        self.group_legend_layout = QVBoxLayout(self.group_legend_widget)
+        self.group_legend_layout.setContentsMargins(0, 0, 0, 0)
+        self.group_legend_layout.setSpacing(8)
+        panel_layout.addWidget(self.group_legend_widget)
         panel_layout.addStretch(1)
 
         plot_panel = QWidget()
+        plot_panel.setObjectName("plotPanel")
         plot_layout = QVBoxLayout(plot_panel)
+        plot_layout.setContentsMargins(18, 16, 18, 16)
+        plot_layout.setSpacing(10)
         self.counter_label = QLabel("Подходящих материалов: 0")
         self.counter_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
-        self.figure = plt.figure()
+        self.figure = plt.figure(facecolor="#F8FAFC")
         self.canvas = FigureCanvas(self.figure)
+        self.canvas.setStyleSheet("background: #F8FAFC; border-radius: 12px;")
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.updateGeometry()
         plot_layout.addWidget(self.canvas)
@@ -141,6 +164,77 @@ class AshbyDiagramWindow(QMainWindow):
         self.canvas.mpl_connect("button_release_event", self.on_release)
         self.canvas.mpl_connect("motion_notify_event", self.on_motion)
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
+
+    def apply_modern_theme(self):
+        self.setStyleSheet(
+            """
+            QWidget {
+                background-color: #F3F6FB;
+                color: #1F2937;
+                font-size: 13px;
+                font-family: "Segoe UI", "Inter", "Roboto", sans-serif;
+            }
+            #controlPanel, #plotPanel {
+                background: #FFFFFF;
+                border: 1px solid #E5EAF2;
+                border-radius: 14px;
+            }
+            QGroupBox {
+                font-weight: 600;
+                border: 1px solid #E5EAF2;
+                border-radius: 10px;
+                margin-top: 10px;
+                padding: 10px 8px 8px 8px;
+                background: #FCFDFF;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px;
+                color: #334155;
+            }
+            QLineEdit, QComboBox {
+                border: 1px solid #D6DCE8;
+                border-radius: 8px;
+                padding: 6px 8px;
+                background: #FFFFFF;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #4C6EF5;
+            }
+            QPushButton {
+                border: 1px solid #D6DCE8;
+                border-radius: 8px;
+                padding: 7px 10px;
+                background: #FFFFFF;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #F1F5FF;
+            }
+            QPushButton:pressed {
+                background: #E4ECFF;
+            }
+            QPushButton#primaryButton {
+                background: #3B5BDB;
+                border-color: #3B5BDB;
+                color: #FFFFFF;
+            }
+            QPushButton#primaryButton:hover {
+                background: #2F4FCB;
+            }
+            QLabel {
+                background: transparent;
+            }
+            #controlPanel QLabel,
+            #controlPanel QGroupBox,
+            #controlPanel QComboBox,
+            #controlPanel QLineEdit,
+            #controlPanel QPushButton {
+                font-size: 15px;
+            }
+            """
+        )
 
     @staticmethod
     def lighten_color(hex_color, factor=0.65):
@@ -189,13 +283,34 @@ class AshbyDiagramWindow(QMainWindow):
 
             self.df = merged.reset_index(drop=True)
             self.info_label.setText(f"Загружено материалов: {len(self.df)}")
+            self.update_group_legend()
             self.clear_plot_placeholder("Выберите критерий, чтобы построить диаграмму")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить данные:\n{e}")
 
+    def update_group_legend(self):
+        if self.groups_df is None or self.groups_df.empty:
+            self.group_legend_label.setText("Цвета групп недоступны")
+            return
+        self.group_legend_label.setText("Цвета групп:")
+        while self.group_legend_layout.count():
+            item = self.group_legend_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for i, row in enumerate(self.groups_df.itertuples(index=False)):
+            color = self.group_colors[i % len(self.group_colors)]
+            chip = QLabel(f"<span style='color:{color}; font-size:18px;'>●</span>  {row.group_name}")
+            chip.setStyleSheet(
+                "background: #F8FAFF; border: 1px solid #D8E1F2; border-radius: 10px; "
+                "padding: 8px 10px; color: #1E293B; font-size: 15px; font-weight: 600;"
+            )
+            self.group_legend_layout.addWidget(chip)
+
     def clear_plot_placeholder(self, message):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
+        ax.set_facecolor("#F8FAFC")
         ax.axis("off")
         ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12, color="#666666", transform=ax.transAxes)
         self.counter_label.setText("Подходящих материалов: 0")
@@ -391,33 +506,53 @@ class AshbyDiagramWindow(QMainWindow):
 
         return x, y, final_mask, mask
 
-    def rounded_patch_from_log_points(self, points_log, color, alpha, lw=1.2, zorder=2):
+    def rounded_geometry_from_log_points(self, points_log):
         if len(points_log) == 0:
             return None
 
+        smooth_radius = 0.02
         if len(points_log) == 1:
             geom = Point(points_log[0])
-            radius = 0.04
+            radius = 0.055
             rounded = geom.buffer(radius, join_style=1)
         elif len(points_log) == 2:
             geom = LineString(points_log)
             seg = np.linalg.norm(np.array(points_log[0]) - np.array(points_log[1]))
-            radius = max(seg * 0.18, 0.03)
+            radius = max(seg * 0.24, 0.045)
             rounded = geom.buffer(radius, cap_style=1, join_style=1)
         else:
             hull = MultiPoint(points_log).convex_hull
             if not isinstance(hull, Polygon):
                 return None
             minx, miny, maxx, maxy = hull.bounds
-            radius = max((maxx - minx), (maxy - miny)) * 0.14
-            radius = max(radius, 0.02)
+            radius = max((maxx - minx), (maxy - miny)) * 0.2
+            radius = max(radius, 0.035)
             rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
+            smooth_radius = radius * 0.35
 
+        if rounded.is_empty:
+            return None
+        rounded = rounded.buffer(smooth_radius, join_style=1).buffer(-smooth_radius, join_style=1)
         if rounded.is_empty:
             return None
         if rounded.geom_type == "MultiPolygon":
             rounded = max(rounded.geoms, key=lambda g: g.area)
-        coords = np.array(rounded.exterior.coords)
+        return rounded
+
+    def rounded_patch_from_log_points(self, points_log, color, alpha, lw=1.2, zorder=2):
+        rounded = self.rounded_geometry_from_log_points(points_log)
+        if rounded is None:
+            return None
+        return self.geometry_to_patch(rounded, color=color, alpha=alpha, lw=lw, zorder=zorder)
+
+    def geometry_to_patch(self, geom, color, alpha, lw=1.2, zorder=2):
+        if geom is None or geom.is_empty:
+            return None
+        if geom.geom_type == "MultiPolygon":
+            geom = max(geom.geoms, key=lambda g: g.area)
+        if geom.geom_type != "Polygon":
+            return None
+        coords = np.array(geom.exterior.coords)
         coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
         return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor=color, alpha=alpha, linewidth=lw, zorder=zorder)
 
@@ -448,6 +583,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
+        ax.set_facecolor("#F8FAFC")
         ax.set_xscale("log")
         ax.set_yscale("log")
         self.material_artists = []
@@ -467,35 +603,28 @@ class AshbyDiagramWindow(QMainWindow):
         label_points = []
         group_bounds = []
 
-        group_colors = ["#3B5BDB", "#D9480F", "#2B8A3E", "#862E9C", "#B08900", "#0B7285", "#C2255C", "#5C940D"]
         group_color_by_id = {}
+        group_geom_by_id = {}
+        subgroup_color_by_name = {}
 
         group_rows = self.groups_df.itertuples(index=False) if self.groups_df is not None else []
         for i, group_row in enumerate(group_rows):
             gname = group_row.group_name
             gid = group_row.group_id
-            group_color_by_id[gid] = group_colors[i % len(group_colors)]
+            group_color_by_id[gid] = self.group_colors[i % len(self.group_colors)]
             gdf = valid_df[valid_df["group_id"] == gid]
             if gdf.empty:
                 continue
             group_ok = bool(suitable_mask.loc[gdf.index].any())
             group_alpha = 0.23 if group_ok else 0.08
             pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
-            patch = self.rounded_patch_from_log_points(
-                pts,
-                color=group_color_by_id[gid],
-                alpha=group_alpha,
-                lw=2.0 if group_ok else 1.0,
-                zorder=0.5,
-            )
+            ggeom = self.rounded_geometry_from_log_points(pts)
+            group_geom_by_id[gid] = ggeom
+            patch = self.geometry_to_patch(ggeom, color=group_color_by_id[gid], alpha=group_alpha, lw=2.0 if group_ok else 1.0, zorder=0.5)
             if patch is not None:
                 ax.add_patch(patch)
                 verts = patch.get_xy()
                 group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
-                center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
-                self.place_non_overlapping_label(
-                    ax, center[0], center[1], str(gname), label_points, fontsize=9, weight="bold", alpha=0.95 if group_ok else 0.35, zorder=5
-                )
 
         for sname, sdf in valid_df.groupby("subgroup_name", dropna=False):
             sub_ok = bool(suitable_mask.loc[sdf.index].any())
@@ -504,28 +633,26 @@ class AshbyDiagramWindow(QMainWindow):
             subgroup_group_id = sdf["group_id"].iloc[0] if len(sdf) else None
             base_group_color = group_color_by_id.get(subgroup_group_id, "#3B5BDB")
             subgroup_color = self.lighten_color(base_group_color, factor=0.68)
-            spatch = self.rounded_patch_from_log_points(
-                pts,
-                color=subgroup_color,
-                alpha=sub_alpha,
-                lw=1.5 if sub_ok else 0.8,
-                zorder=1.2,
-            )
+            subgroup_color_by_name[sname] = subgroup_color
+            sgeom = self.rounded_geometry_from_log_points(pts)
+            ggeom = group_geom_by_id.get(subgroup_group_id)
+            if sgeom is not None and ggeom is not None:
+                sgeom = sgeom.intersection(ggeom)
+            spatch = self.geometry_to_patch(sgeom, color=subgroup_color, alpha=sub_alpha, lw=1.5 if sub_ok else 0.8, zorder=1.2)
             if spatch is not None:
                 ax.add_patch(spatch)
-                s_center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
-                self.place_non_overlapping_label(
-                    ax, s_center[0], s_center[1], str(sname), label_points, fontsize=7, weight="normal", alpha=0.8 if sub_ok else 0.35, zorder=5
-                )
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
-            color = "#111111"
+            subgroup_name = row.get("subgroup_name", "")
+            color = "#8B5E3C"
             patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
             patch.set_alpha(0.9 if is_ok else 0.2)
             ax.add_patch(patch)
-            self.material_artists.append((patch, str(row.get("material_name", "Material"))))
-            self.material_points.append((float(row[x_col]), float(row[y_col]), str(row.get("material_name", "Material"))))
+            material_name = str(row.get("material_name", "Material"))
+            tip_text = f"{material_name}\nПодгруппа: {subgroup_name}"
+            self.material_artists.append((patch, tip_text))
+            self.material_points.append((float(row[x_col]), float(row[y_col]), tip_text))
 
         if group_bounds:
             gx0 = min(b[0] for b in group_bounds)
@@ -538,7 +665,7 @@ class AshbyDiagramWindow(QMainWindow):
         if cfg is not None:
             xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
             yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
-            self.line_artist = ax.plot(xx, yy, color="red", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
+            self.line_artist = ax.plot(xx, yy, color="#E03131", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
         else:
             self.line_artist = None
 
@@ -580,15 +707,20 @@ class AshbyDiagramWindow(QMainWindow):
 
         ax.set_xlim(*x_lim)
         ax.set_ylim(*y_lim)
-        ax.set_xlabel("ρ — Плотность (кг/м³)")
+        ax.set_xlabel("ρ — Плотность (кг/м³)", fontsize=11, color="#334155")
         if y_col == "Youngs_Modulus_GPa":
-            ax.set_ylabel("E — Модуль Юнга (ГПа)")
+            ax.set_ylabel("E — Модуль Юнга (ГПа)", fontsize=11, color="#334155")
         elif y_col == "Strength_MPa":
-            ax.set_ylabel("σ — Прочность (МПа)")
+            ax.set_ylabel("σ — Прочность (МПа)", fontsize=11, color="#334155")
         else:
-            ax.set_ylabel("Свойство материала")
-        ax.set_title("Ashby диаграмма (логарифмический масштаб)")
-        ax.grid(True, which="both", linestyle="--", alpha=0.3)
+            ax.set_ylabel("Свойство материала", fontsize=11, color="#334155")
+        ax.set_title("Ashby диаграмма (логарифмический масштаб)", fontsize=13, pad=14, color="#0F172A", weight="semibold")
+        ax.tick_params(axis="both", which="major", labelsize=10, colors="#475569")
+        ax.tick_params(axis="both", which="minor", labelsize=8, colors="#94A3B8")
+        for spine in ax.spines.values():
+            spine.set_color("#CBD5E1")
+        ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.38, color="#CBD5E1")
+        ax.grid(True, which="minor", linestyle="--", linewidth=0.55, alpha=0.22, color="#DCE3EE")
         if self.line_artist is not None:
             ax.legend(loc="lower left")
         self.figure.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.1)
@@ -652,10 +784,10 @@ class AshbyDiagramWindow(QMainWindow):
             self.hover_annotation = event.inaxes.annotate(
                 "",
                 xy=(0, 0),
-                xytext=(10, 10),
+                xytext=(14, 14),
                 textcoords="offset points",
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.9),
-                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.55", fc="white", alpha=0.96, ec="#CBD5E1", lw=1.0),
+                fontsize=11,
             )
             self.hover_annotation.set_visible(False)
 
@@ -685,14 +817,46 @@ class AshbyDiagramWindow(QMainWindow):
         self.canvas.draw_idle()
 
     def place_non_overlapping_label(self, ax, x, y, text, existing_points, fontsize=8, weight="normal", alpha=0.8, zorder=5):
-        lx, ly = np.log10(x), np.log10(y)
-        min_dist = 0.08
-        tries = 0
-        while tries < 7 and any(np.hypot(lx - ex, ly - ey) < min_dist for ex, ey in existing_points):
-            ly += 0.035
-            tries += 1
-        existing_points.append((lx, ly))
-        ax.text(10 ** lx, 10 ** ly, text, fontsize=fontsize, weight=weight, ha="center", va="center", alpha=alpha, zorder=zorder)
+        anchor_px = ax.transData.transform((x, y))
+        candidate_offsets = [
+            (0, 0), (0, 14), (0, -14), (14, 0), (-14, 0),
+            (12, 12), (-12, 12), (12, -12), (-12, -12),
+            (0, 24), (24, 0), (-24, 0), (0, -24),
+        ]
+        min_dist_px = max(48, fontsize * 5)
+
+        best_offset = candidate_offsets[0]
+        best_score = -1
+        for dx, dy in candidate_offsets:
+            px = (anchor_px[0] + dx, anchor_px[1] + dy)
+            if not existing_points:
+                best_offset = (dx, dy)
+                break
+            dist = min(np.hypot(px[0] - ex, px[1] - ey) for ex, ey in existing_points)
+            if dist > min_dist_px:
+                best_offset = (dx, dy)
+                break
+            if dist > best_score:
+                best_score = dist
+                best_offset = (dx, dy)
+
+        final_px = (anchor_px[0] + best_offset[0], anchor_px[1] + best_offset[1])
+        existing_points.append(final_px)
+        txt = ax.annotate(
+            text,
+            xy=(x, y),
+            xytext=best_offset,
+            textcoords="offset points",
+            fontsize=fontsize,
+            weight=weight,
+            ha="center",
+            va="center",
+            alpha=alpha,
+            color="#0F172A",
+            zorder=zorder,
+            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.72 if alpha > 0.6 else 0.45),
+        )
+        txt.set_path_effects([pe.withStroke(linewidth=1.6, foreground="white", alpha=0.9)])
 
     def zoom_plot(self, factor):
         if self.figure.axes:
@@ -731,6 +895,26 @@ class AshbyDiagramWindow(QMainWindow):
         layout = QVBoxLayout(dlg)
 
         table = QTableWidget()
+        table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            """
+            QTableWidget {
+                background: #FFFFFF;
+                border: 1px solid #E5EAF2;
+                gridline-color: #EEF2F7;
+                alternate-background-color: #F8FAFD;
+            }
+            QHeaderView::section {
+                background: #EEF3FF;
+                color: #1E293B;
+                padding: 6px;
+                border: none;
+                border-right: 1px solid #DFE7F3;
+                border-bottom: 1px solid #DFE7F3;
+                font-weight: 600;
+            }
+            """
+        )
         df = self.last_suitable_df[show_cols].reset_index(drop=True)
         table.setColumnCount(len(show_cols))
         table.setRowCount(len(df))
@@ -741,6 +925,7 @@ class AshbyDiagramWindow(QMainWindow):
                 table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
 
         table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(table)
         dlg.exec_()
 
