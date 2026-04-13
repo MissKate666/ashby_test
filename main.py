@@ -39,10 +39,6 @@ class AshbyDiagramWindow(QMainWindow):
         self.groups_df = None
         self.group_map = None
         self.dragging_line = False
-        self.drag_axis = None
-        self.drag_start_y = None
-        self.drag_start_data_y = None
-        self.drag_start_intercept = None
         self.condition_intercept = None
         self.line_artist = None
         self.hover_annotation = None
@@ -756,62 +752,37 @@ class AshbyDiagramWindow(QMainWindow):
     def on_press(self, event):
         if event.button == 2 and event.inaxes is not None:
             self.panning = True
-            self.pan_start = (event.x, event.y, event.inaxes.get_xlim(), event.inaxes.get_ylim())
+            self.pan_start = (event.xdata, event.ydata, event.inaxes.get_xlim(), event.inaxes.get_ylim())
             return
         if event.inaxes is None or self.line_artist is None:
             return
-        if event.button == 1 and self.current_condition_config() is not None:
+        contains, _ = self.line_artist.contains(event)
+        if contains and event.button == 1:
             self.dragging_line = True
-            self.drag_axis = event.inaxes
-            self.drag_start_y = event.y
-            _, start_data_y = event.inaxes.transData.inverted().transform((event.x, event.y))
-            self.drag_start_data_y = max(start_data_y, np.finfo(float).tiny)
-            self.drag_start_intercept = self.condition_intercept if self.condition_intercept is not None else 0.0
 
     def on_motion(self, event):
-        if event.inaxes is None and not self.dragging_line:
+        if event.inaxes is None:
             return
         if self.dragging_line:
-            ax = self.drag_axis if self.drag_axis is not None else event.inaxes
-            if ax is None:
-                return
-            if ax.bbox.height <= 0:
-                return
-            y0, y1 = ax.get_ylim()
-            if (not np.isfinite(y0)) or (not np.isfinite(y1)):
-                return
-            if y0 <= 0 or y1 <= 0:
-                return
-            _, current_data_y = ax.transData.inverted().transform((event.x, event.y))
-            current_data_y = max(current_data_y, np.finfo(float).tiny)
-            dlogy = np.log10(current_data_y) - np.log10(self.drag_start_data_y)
-            self.condition_intercept = self.drag_start_intercept + dlogy * 2.0
-            self.update_plot()
+            xlim = event.inaxes.get_xlim()
+            x_ref = np.sqrt(xlim[0] * xlim[1])
+            self.update_line_from_y(event.ydata, x_ref)
             return
         if self.panning and self.pan_start is not None:
-            start_px_x, start_px_y, xlim0, ylim0 = self.pan_start
-            ax = event.inaxes
-            if ax.bbox.width > 0 and ax.bbox.height > 0:
-                dx_px = event.x - start_px_x
-                dy_px = event.y - start_px_y
-                lx0, lx1 = np.log10(xlim0[0]), np.log10(xlim0[1])
-                ly0, ly1 = np.log10(ylim0[0]), np.log10(ylim0[1])
-                dlogx = dx_px * (lx1 - lx0) / ax.bbox.width
-                dlogy = dy_px * (ly1 - ly0) / ax.bbox.height
-                new_xlim = (10 ** (lx0 - dlogx), 10 ** (lx1 - dlogx))
-                new_ylim = (10 ** (ly0 - dlogy), 10 ** (ly1 - dlogy))
-                ax.set_xlim(*new_xlim)
-                ax.set_ylim(*new_ylim)
+            start_x, start_y, xlim0, ylim0 = self.pan_start
+            if start_x and start_y and start_x > 0 and start_y > 0 and event.xdata and event.ydata:
+                dx = np.log10(event.xdata) - np.log10(start_x)
+                dy = np.log10(event.ydata) - np.log10(start_y)
+                new_xlim = (10 ** (np.log10(xlim0[0]) - dx), 10 ** (np.log10(xlim0[1]) - dx))
+                new_ylim = (10 ** (np.log10(ylim0[0]) - dy), 10 ** (np.log10(ylim0[1]) - dy))
+                event.inaxes.set_xlim(*new_xlim)
+                event.inaxes.set_ylim(*new_ylim)
                 self.canvas.draw_idle()
             return
         self.update_material_hover(event)
 
     def on_release(self, event):
         self.dragging_line = False
-        self.drag_axis = None
-        self.drag_start_y = None
-        self.drag_start_data_y = None
-        self.drag_start_intercept = None
         self.panning = False
         self.pan_start = None
 
