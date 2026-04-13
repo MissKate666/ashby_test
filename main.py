@@ -51,7 +51,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.translation_cache = {}
         self.translation_overrides = {
             "Glasses": "Стекло",
-            "Natural": "Натуральные",
+            "Natural": "Природные",
         }
         self.last_suitable_df = pd.DataFrame()
         self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
