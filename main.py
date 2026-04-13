@@ -29,7 +29,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from shapely.geometry import LineString, MultiPoint, Point, Polygon
+from shapely.affinity import rotate, scale, translate
+from shapely.geometry import Point, Polygon
 
 
 class AshbyDiagramWindow(QMainWindow):
@@ -510,34 +511,41 @@ class AshbyDiagramWindow(QMainWindow):
         if len(points_log) == 0:
             return None
 
-        smooth_radius = 0.02
-        if len(points_log) == 1:
-            geom = Point(points_log[0])
-            radius = 0.055
-            rounded = geom.buffer(radius, join_style=1)
-        elif len(points_log) == 2:
-            geom = LineString(points_log)
-            seg = np.linalg.norm(np.array(points_log[0]) - np.array(points_log[1]))
-            radius = max(seg * 0.24, 0.045)
-            rounded = geom.buffer(radius, cap_style=1, join_style=1)
-        else:
-            hull = MultiPoint(points_log).convex_hull
-            if not isinstance(hull, Polygon):
-                return None
-            minx, miny, maxx, maxy = hull.bounds
-            radius = max((maxx - minx), (maxy - miny)) * 0.2
-            radius = max(radius, 0.035)
-            rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
-            smooth_radius = radius * 0.35
+        points = np.asarray(points_log, dtype=float)
+        if points.ndim != 2 or points.shape[1] != 2:
+            return None
+        finite_mask = np.isfinite(points).all(axis=1)
+        points = points[finite_mask]
+        if len(points) == 0:
+            return None
 
-        if rounded.is_empty:
+        center = points.mean(axis=0)
+        base_circle = Point(0.0, 0.0).buffer(1.0, resolution=64)
+
+        if len(points) == 1:
+            rx = ry = 0.075
+            angle_deg = 0.0
+        else:
+            covariance = np.cov(points, rowvar=False)
+            eigvals, eigvecs = np.linalg.eigh(covariance)
+            order = np.argsort(eigvals)[::-1]
+            eigvals = np.clip(eigvals[order], 1e-7, None)
+            eigvecs = eigvecs[:, order]
+
+            spread = np.sqrt(eigvals)
+            rx = max(spread[0] * 2.8, 0.05)
+            ry = max(spread[1] * 2.8, 0.035)
+            angle_deg = float(np.degrees(np.arctan2(eigvecs[1, 0], eigvecs[0, 0])))
+
+        ellipse = scale(base_circle, xfact=rx, yfact=ry, origin=(0.0, 0.0))
+        ellipse = rotate(ellipse, angle_deg, origin=(0.0, 0.0), use_radians=False)
+        ellipse = translate(ellipse, xoff=float(center[0]), yoff=float(center[1]))
+
+        if ellipse.is_empty:
             return None
-        rounded = rounded.buffer(smooth_radius, join_style=1).buffer(-smooth_radius, join_style=1)
-        if rounded.is_empty:
-            return None
-        if rounded.geom_type == "MultiPolygon":
-            rounded = max(rounded.geoms, key=lambda g: g.area)
-        return rounded
+        if ellipse.geom_type == "MultiPolygon":
+            ellipse = max(ellipse.geoms, key=lambda g: g.area)
+        return ellipse
 
     def rounded_patch_from_log_points(self, points_log, color, alpha, lw=1.2, zorder=2):
         rounded = self.rounded_geometry_from_log_points(points_log)
