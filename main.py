@@ -132,8 +132,13 @@ class AshbyDiagramWindow(QMainWindow):
         panel_layout.addWidget(self.info_label)
         self.group_legend_label = QLabel("Цвета групп появятся после загрузки данных")
         self.group_legend_label.setWordWrap(True)
-        self.group_legend_label.setStyleSheet("font-size: 12px; color: #334155;")
+        self.group_legend_label.setStyleSheet("font-size: 15px; font-weight: 700; color: #1E293B;")
         panel_layout.addWidget(self.group_legend_label)
+        self.group_legend_widget = QWidget()
+        self.group_legend_layout = QVBoxLayout(self.group_legend_widget)
+        self.group_legend_layout.setContentsMargins(0, 0, 0, 0)
+        self.group_legend_layout.setSpacing(8)
+        panel_layout.addWidget(self.group_legend_widget)
         panel_layout.addStretch(1)
 
         plot_panel = QWidget()
@@ -221,6 +226,13 @@ class AshbyDiagramWindow(QMainWindow):
             QLabel {
                 background: transparent;
             }
+            #controlPanel QLabel,
+            #controlPanel QGroupBox,
+            #controlPanel QComboBox,
+            #controlPanel QLineEdit,
+            #controlPanel QPushButton {
+                font-size: 15px;
+            }
             """
         )
 
@@ -280,11 +292,20 @@ class AshbyDiagramWindow(QMainWindow):
         if self.groups_df is None or self.groups_df.empty:
             self.group_legend_label.setText("Цвета групп недоступны")
             return
-        lines = ["<b>Цвета групп:</b>"]
+        self.group_legend_label.setText("Цвета групп:")
+        while self.group_legend_layout.count():
+            item = self.group_legend_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
         for i, row in enumerate(self.groups_df.itertuples(index=False)):
             color = self.group_colors[i % len(self.group_colors)]
-            lines.append(f"<span style='color:{color};'>●</span> {row.group_name}")
-        self.group_legend_label.setText("<br>".join(lines))
+            chip = QLabel(f"<span style='color:{color}; font-size:18px;'>●</span>  {row.group_name}")
+            chip.setStyleSheet(
+                "background: #F8FAFF; border: 1px solid #D8E1F2; border-radius: 10px; "
+                "padding: 8px 10px; color: #1E293B; font-size: 15px; font-weight: 600;"
+            )
+            self.group_legend_layout.addWidget(chip)
 
     def clear_plot_placeholder(self, message):
         self.figure.clear()
@@ -489,6 +510,7 @@ class AshbyDiagramWindow(QMainWindow):
         if len(points_log) == 0:
             return None
 
+        smooth_radius = 0.02
         if len(points_log) == 1:
             geom = Point(points_log[0])
             radius = 0.055
@@ -506,7 +528,11 @@ class AshbyDiagramWindow(QMainWindow):
             radius = max((maxx - minx), (maxy - miny)) * 0.2
             radius = max(radius, 0.035)
             rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
+            smooth_radius = radius * 0.35
 
+        if rounded.is_empty:
+            return None
+        rounded = rounded.buffer(smooth_radius, join_style=1).buffer(-smooth_radius, join_style=1)
         if rounded.is_empty:
             return None
         if rounded.geom_type == "MultiPolygon":
@@ -615,16 +641,11 @@ class AshbyDiagramWindow(QMainWindow):
             spatch = self.geometry_to_patch(sgeom, color=subgroup_color, alpha=sub_alpha, lw=1.5 if sub_ok else 0.8, zorder=1.2)
             if spatch is not None:
                 ax.add_patch(spatch)
-                if sub_ok:
-                    s_center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
-                    self.place_non_overlapping_label(
-                        ax, s_center[0], s_center[1], str(sname), label_points, fontsize=7, weight="normal", alpha=0.85, zorder=5
-                    )
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
             subgroup_name = row.get("subgroup_name", "")
-            color = subgroup_color_by_name.get(subgroup_name, "#111111")
+            color = "#8B5E3C"
             patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
             patch.set_alpha(0.9 if is_ok else 0.2)
             ax.add_patch(patch)
@@ -763,10 +784,10 @@ class AshbyDiagramWindow(QMainWindow):
             self.hover_annotation = event.inaxes.annotate(
                 "",
                 xy=(0, 0),
-                xytext=(10, 10),
+                xytext=(14, 14),
                 textcoords="offset points",
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.9),
-                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.55", fc="white", alpha=0.96, ec="#CBD5E1", lw=1.0),
+                fontsize=11,
             )
             self.hover_annotation.set_visible(False)
 
