@@ -776,6 +776,10 @@ class AshbyDiagramWindow(QMainWindow):
             if ax.bbox.height <= 0:
                 return
             y0, y1 = ax.get_ylim()
+            if (not np.isfinite(y0)) or (not np.isfinite(y1)):
+                return
+            if y0 <= 0 or y1 <= 0:
+                return
             ly0, ly1 = np.log10(y0), np.log10(y1)
             dlogy = (event.y - self.drag_start_y) * (ly1 - ly0) / ax.bbox.height
             self.condition_intercept = self.drag_start_intercept + dlogy
