@@ -58,6 +58,7 @@ class AshbyDiagramWindow(QMainWindow):
         }
         self.last_suitable_df = pd.DataFrame()
         self.last_suitable_by_criterion = {}
+        self.range_rows = []
         self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
@@ -108,24 +109,24 @@ class AshbyDiagramWindow(QMainWindow):
         cond_group.setLayout(cond_layout)
         panel_layout.addWidget(cond_group)
 
-        axis_group = QGroupBox("Диапазон по осям (опционально)")
-        axis_layout = QGridLayout()
-        self.x_min_input = QLineEdit()
-        self.x_max_input = QLineEdit()
-        self.y_min_input = QLineEdit()
-        self.y_max_input = QLineEdit()
-        for w in [self.x_min_input, self.x_max_input, self.y_min_input, self.y_max_input]:
-            w.setPlaceholderText("пусто = без ограничения")
-            w.editingFinished.connect(self.update_plot)
-
-        axis_layout.addWidget(QLabel("X min"), 0, 0)
-        axis_layout.addWidget(self.x_min_input, 0, 1)
-        axis_layout.addWidget(QLabel("X max"), 1, 0)
-        axis_layout.addWidget(self.x_max_input, 1, 1)
-        axis_layout.addWidget(QLabel("Y min"), 2, 0)
-        axis_layout.addWidget(self.y_min_input, 2, 1)
-        axis_layout.addWidget(QLabel("Y max"), 3, 0)
-        axis_layout.addWidget(self.y_max_input, 3, 1)
+        axis_group = QGroupBox("Диапазоны (опционально)")
+        axis_layout = QVBoxLayout()
+        add_row = QHBoxLayout()
+        self.range_var_combo = QComboBox()
+        self.range_var_combo.addItems(["Плотность ρ", "Модуль Юнга E", "Прочность σ"])
+        self.range_side_combo = QComboBox()
+        self.range_side_combo.addItems(["min", "max"])
+        self.add_range_btn = QPushButton("Добавить диапазон")
+        self.add_range_btn.clicked.connect(self.add_range_row)
+        add_row.addWidget(self.range_var_combo)
+        add_row.addWidget(self.range_side_combo)
+        add_row.addWidget(self.add_range_btn)
+        axis_layout.addLayout(add_row)
+        self.ranges_widget = QWidget()
+        self.ranges_layout = QVBoxLayout(self.ranges_widget)
+        self.ranges_layout.setContentsMargins(0, 0, 0, 0)
+        self.ranges_layout.setSpacing(6)
+        axis_layout.addWidget(self.ranges_widget)
         axis_group.setLayout(axis_layout)
         panel_layout.addWidget(axis_group)
 
@@ -392,14 +393,62 @@ class AshbyDiagramWindow(QMainWindow):
         self.update_plot()
 
     @staticmethod
-    def parse_optional_float(widget: QLineEdit):
-        text = widget.text().strip().replace(",", ".")
+    def parse_optional_float_from_text(text: str):
+        text = text.strip().replace(",", ".")
         if not text:
             return None
         try:
             return float(text)
         except ValueError:
             return None
+
+    @staticmethod
+    def variable_column_by_index(index: int):
+        mapping = {
+            0: "Density_kg_m3",
+            1: "Youngs_Modulus_GPa",
+            2: "Strength_MPa",
+        }
+        return mapping.get(index, "Density_kg_m3")
+
+    @staticmethod
+    def variable_title_by_column(col: str):
+        labels = {
+            "Density_kg_m3": "Плотность ρ",
+            "Youngs_Modulus_GPa": "Модуль Юнга E",
+            "Strength_MPa": "Прочность σ",
+        }
+        return labels.get(col, col)
+
+    def add_range_row(self):
+        col = self.variable_column_by_index(self.range_var_combo.currentIndex())
+        side = self.range_side_combo.currentText()
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        title = QLabel(f"{self.variable_title_by_column(col)} {side}")
+        value_input = QLineEdit()
+        value_input.setPlaceholderText("значение")
+        value_input.editingFinished.connect(self.update_plot)
+        remove_btn = QPushButton("✕")
+        remove_btn.setFixedWidth(34)
+        row_layout.addWidget(title)
+        row_layout.addWidget(value_input, stretch=1)
+        row_layout.addWidget(remove_btn)
+        self.ranges_layout.addWidget(row_widget)
+
+        row_data = {"column": col, "side": side, "input": value_input, "widget": row_widget}
+        self.range_rows.append(row_data)
+
+        def remove_this_row():
+            self.range_rows[:] = [r for r in self.range_rows if r is not row_data]
+            row_widget.setParent(None)
+            row_widget.deleteLater()
+            self.update_plot()
+
+        remove_btn.clicked.connect(remove_this_row)
+        self.update_plot()
 
     def translate_series_to_russian(self, series: pd.Series) -> pd.Series:
         if self.translator is None:
@@ -492,17 +541,22 @@ class AshbyDiagramWindow(QMainWindow):
             return None
         return None
 
-    def validate_axis_bounds(self):
-        xmin = self.parse_optional_float(self.x_min_input)
-        xmax = self.parse_optional_float(self.x_max_input)
-        ymin = self.parse_optional_float(self.y_min_input)
-        ymax = self.parse_optional_float(self.y_max_input)
-
+    def validate_ranges(self):
+        constraints = {}
         errors = []
-        if xmin is not None and xmax is not None and xmin > xmax:
-            errors.append("X min не может быть больше X max.")
-        if ymin is not None and ymax is not None and ymin > ymax:
-            errors.append("Y min не может быть больше Y max.")
+        for row in self.range_rows:
+            col = row["column"]
+            side = row["side"]
+            value = self.parse_optional_float_from_text(row["input"].text())
+            if value is None:
+                continue
+            if col not in constraints:
+                constraints[col] = {"min": None, "max": None}
+            constraints[col][side] = value
+
+        for col, bounds in constraints.items():
+            if bounds["min"] is not None and bounds["max"] is not None and bounds["min"] > bounds["max"]:
+                errors.append(f"{self.variable_title_by_column(col)}: min не может быть больше max.")
 
         if errors:
             if not self.invalid_bounds_notified:
@@ -511,9 +565,9 @@ class AshbyDiagramWindow(QMainWindow):
             return None
 
         self.invalid_bounds_notified = False
-        return xmin, xmax, ymin, ymax
+        return constraints
 
-    def build_mask(self, df, x_col, y_col, condition_keys):
+    def build_mask(self, df, x_col, y_col, condition_keys, range_constraints=None):
         x = pd.to_numeric(df[x_col], errors="coerce")
         y = pd.to_numeric(df[y_col], errors="coerce")
         mask = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
@@ -535,19 +589,12 @@ class AshbyDiagramWindow(QMainWindow):
         final_mask = pd.Series(False, index=df.index)
         final_mask.loc[mask.index[mask]] = cond_mask.values
 
-        xmin = self.parse_optional_float(self.x_min_input)
-        xmax = self.parse_optional_float(self.x_max_input)
-        ymin = self.parse_optional_float(self.y_min_input)
-        ymax = self.parse_optional_float(self.y_max_input)
-
-        if xmin is not None:
-            final_mask &= x >= xmin
-        if xmax is not None:
-            final_mask &= x <= xmax
-        if ymin is not None:
-            final_mask &= y >= ymin
-        if ymax is not None:
-            final_mask &= y <= ymax
+        for col, bounds in (range_constraints or {}).items():
+            values = pd.to_numeric(df[col], errors="coerce")
+            if bounds.get("min") is not None:
+                final_mask &= values >= bounds["min"]
+            if bounds.get("max") is not None:
+                final_mask &= values <= bounds["max"]
 
         return x, y, final_mask, mask
 
@@ -623,8 +670,8 @@ class AshbyDiagramWindow(QMainWindow):
     def update_plot(self):
         if self.df is None:
             return
-        limits = self.validate_axis_bounds()
-        if limits is None:
+        range_constraints = self.validate_ranges()
+        if range_constraints is None:
             return
 
         condition_keys = self.selected_condition_keys()
@@ -637,7 +684,7 @@ class AshbyDiagramWindow(QMainWindow):
         y_cols = [cfg_map[k]["y_col"] for k in condition_keys]
         mask_y_col = "Strength_MPa" if "Strength_MPa" in y_cols else "Youngs_Modulus_GPa"
 
-        _, _, suitable_mask, _ = self.build_mask(self.df, x_col, mask_y_col, condition_keys)
+        _, _, suitable_mask, _ = self.build_mask(self.df, x_col, mask_y_col, condition_keys, range_constraints=range_constraints)
         self.last_suitable_by_criterion = {}
 
         self.figure.clear()
@@ -650,7 +697,13 @@ class AshbyDiagramWindow(QMainWindow):
         for ax, key in zip(axes, condition_keys):
             cfg = cfg_map[key]
             y_col = cfg["y_col"]
-            _, _, criterion_mask, criterion_valid_mask = self.build_mask(self.df, x_col, y_col, [key])
+            _, _, criterion_mask, criterion_valid_mask = self.build_mask(
+                self.df,
+                x_col,
+                y_col,
+                [key],
+                range_constraints=range_constraints,
+            )
             criterion_df = self.df[criterion_valid_mask]
             self.last_suitable_by_criterion[key] = self.df[criterion_mask].copy()
 
