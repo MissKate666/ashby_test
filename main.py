@@ -82,7 +82,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         panel = QWidget()
         panel.setObjectName("controlPanel")
-        panel.setMaximumWidth(360)
+        panel.setMaximumWidth(460)
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(16, 16, 16, 16)
         panel_layout.setSpacing(12)
@@ -111,16 +111,22 @@ class AshbyDiagramWindow(QMainWindow):
 
         axis_group = QGroupBox("Диапазоны (опционально)")
         axis_layout = QVBoxLayout()
-        add_row = QHBoxLayout()
+        add_row = QGridLayout()
         self.range_var_combo = QComboBox()
         self.range_var_combo.addItems(["Плотность ρ", "Модуль Юнга E", "Прочность σ"])
+        self.range_var_combo.setMinimumContentsLength(16)
+        self.range_var_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.range_side_combo = QComboBox()
         self.range_side_combo.addItems(["min", "max"])
+        self.range_side_combo.setMinimumContentsLength(6)
+        self.range_side_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.add_range_btn = QPushButton("Добавить диапазон")
         self.add_range_btn.clicked.connect(self.add_range_row)
-        add_row.addWidget(self.range_var_combo)
-        add_row.addWidget(self.range_side_combo)
-        add_row.addWidget(self.add_range_btn)
+        add_row.addWidget(self.range_var_combo, 0, 0)
+        add_row.addWidget(self.range_side_combo, 0, 1)
+        add_row.addWidget(self.add_range_btn, 1, 0, 1, 2)
+        add_row.setColumnStretch(0, 3)
+        add_row.setColumnStretch(1, 1)
         axis_layout.addLayout(add_row)
         self.ranges_widget = QWidget()
         self.ranges_layout = QVBoxLayout(self.ranges_widget)
@@ -588,15 +594,19 @@ class AshbyDiagramWindow(QMainWindow):
 
         final_mask = pd.Series(False, index=df.index)
         final_mask.loc[mask.index[mask]] = cond_mask.values
+        visible_mask = pd.Series(False, index=df.index)
+        visible_mask.loc[mask.index[mask]] = True
 
         for col, bounds in (range_constraints or {}).items():
             values = pd.to_numeric(df[col], errors="coerce")
             if bounds.get("min") is not None:
                 final_mask &= values >= bounds["min"]
+                visible_mask &= values >= bounds["min"]
             if bounds.get("max") is not None:
                 final_mask &= values <= bounds["max"]
+                visible_mask &= values <= bounds["max"]
 
-        return x, y, final_mask, mask
+        return x, y, final_mask, visible_mask
 
     def rounded_geometry_from_log_points(self, points_log, padding=0.0):
         if len(points_log) == 0:
