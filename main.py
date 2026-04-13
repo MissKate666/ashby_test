@@ -152,7 +152,7 @@ class AshbyDiagramWindow(QMainWindow):
         zoom_row.addStretch(1)
         plot_layout.addLayout(zoom_row)
         self.counter_label = QLabel("Подходящих материалов: 0")
-        self.counter_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.counter_label.setStyleSheet("font-weight: 700; font-size: 22px;")
         plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
         self.figure = plt.figure(facecolor="#F8FAFC")
         self.canvas = FigureCanvas(self.figure)
@@ -723,7 +723,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         if cfg is not None and self.condition_intercept is not None:
             line_val = cfg["from_b"](self.condition_intercept)
-            line_info = f"Линия {cfg['label']} = {line_val:.4g}\n(перетаскивайте линию мышью или стрелками ↑/↓, масштаб — колесом)"
+            line_info = f"Линия {cfg['label']} = {line_val:.4g}"
         else:
             line_info = "Условие пока не выбрано"
         self.info_label.setText(
@@ -741,7 +741,7 @@ class AshbyDiagramWindow(QMainWindow):
             ax.set_ylabel("σ — Прочность (МПа)", fontsize=11, color="#334155")
         else:
             ax.set_ylabel("Свойство материала", fontsize=11, color="#334155")
-        ax.set_title("Диаграмма Эшби (логарифмический масштаб)", fontsize=13, pad=14, color="#0F172A", weight="semibold")
+        ax.set_title("Диаграмма Эшби (логарифмический масштаб)", fontsize=18, pad=16, color="#0F172A", weight="bold")
         ax.tick_params(axis="both", which="major", labelsize=10, colors="#475569")
         ax.tick_params(axis="both", which="minor", labelsize=8, colors="#94A3B8")
         for spine in ax.spines.values():
@@ -1020,8 +1020,12 @@ class AshbyDiagramWindow(QMainWindow):
             for c, col in enumerate(show_cols):
                 table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
 
-        table.resizeColumnsToContents()
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        header_metrics = table.horizontalHeader().fontMetrics()
+        for idx, col in enumerate(show_cols):
+            title = col_titles_ru.get(col, col)
+            min_width = header_metrics.horizontalAdvance(title) + 52
+            table.setColumnWidth(idx, max(min_width, 210))
         layout.addWidget(table)
         dlg.exec_()
 
