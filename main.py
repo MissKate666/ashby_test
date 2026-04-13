@@ -26,6 +26,8 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QListWidget,
+    QListWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -38,9 +40,9 @@ class AshbyDiagramWindow(QMainWindow):
         self.df = None
         self.groups_df = None
         self.group_map = None
-        self.dragging_line = False
-        self.condition_intercept = None
-        self.line_artist = None
+        self.dragging_line = None
+        self.condition_intercepts = {}
+        self.line_artists = []
         self.hover_annotation = None
         self.material_artists = []
         self.material_points = []
@@ -84,10 +86,16 @@ class AshbyDiagramWindow(QMainWindow):
 
         cond_group = QGroupBox("Условия")
         cond_layout = QFormLayout()
-        self.condition_combo = QComboBox()
-        self.condition_combo.addItems(["Не выбрано", "Лёгкость (E/ρ)", "Прочность (σ/ρ)", "Изгиб (√E/ρ)"])
-        self.condition_combo.currentIndexChanged.connect(self.on_condition_changed)
-        cond_layout.addRow("Критерий:", self.condition_combo)
+        self.criteria_list = QListWidget()
+        self.criteria_list.setSelectionMode(QListWidget.NoSelection)
+        for key, cfg in self.condition_configs().items():
+            item = QListWidgetItem(cfg["title"])
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            item.setData(Qt.UserRole, key)
+            self.criteria_list.addItem(item)
+        self.criteria_list.itemChanged.connect(self.on_criteria_changed)
+        cond_layout.addRow("Критерии:", self.criteria_list)
 
         self.preference_combo = QComboBox()
         self.preference_combo.addItems(["Высокое значение", "Низкое значение"])
@@ -322,32 +330,38 @@ class AshbyDiagramWindow(QMainWindow):
         self.last_suitable_df = pd.DataFrame()
         self.canvas.draw_idle()
 
-    def current_condition_config(self):
-        idx = self.condition_combo.currentIndex()
-        if idx == 1:
-            return {"y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
-        if idx == 2:
-            return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
-        if idx == 3:
-            return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
-        return None
+    @staticmethod
+    def condition_configs():
+        return {
+            "lightness": {"title": "Лёгкость (E/ρ)", "ratio_col": "E_over_rho", "y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b},
+            "strength": {"title": "Прочность (σ/ρ)", "ratio_col": "Strength_over_rho", "y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b},
+            "bend": {"title": "Изгиб (√E/ρ)", "ratio_col": "SqrtE_over_rho", "y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)},
+        }
 
-    def on_condition_changed(self):
-        cfg = self.current_condition_config()
-        if cfg is None:
-            self.condition_intercept = None
-            self.update_plot()
-            return
+    def selected_condition_keys(self):
+        keys = []
+        for i in range(self.criteria_list.count()):
+            item = self.criteria_list.item(i)
+            if item.checkState() == Qt.Checked:
+                keys.append(item.data(Qt.UserRole))
+        return keys
+
+    def on_criteria_changed(self, _item=None):
+        selected = set(self.selected_condition_keys())
+        for key in list(self.condition_intercepts.keys()):
+            if key not in selected:
+                self.condition_intercepts.pop(key, None)
+
         if self.df is not None and len(self.df):
-            if self.condition_combo.currentIndex() == 1:
-                idx = pd.to_numeric(self.df["E_over_rho"], errors="coerce")
-            elif self.condition_combo.currentIndex() == 2:
-                idx = pd.to_numeric(self.df["Strength_over_rho"], errors="coerce")
-            else:
-                idx = pd.to_numeric(self.df["SqrtE_over_rho"], errors="coerce")
-            idx = idx[(idx > 0) & np.isfinite(idx)]
-            if len(idx):
-                self.condition_intercept = cfg["to_b"](float(idx.median()))
+            cfg_map = self.condition_configs()
+            for key in selected:
+                if key in self.condition_intercepts:
+                    continue
+                cfg = cfg_map[key]
+                idx = pd.to_numeric(self.df[cfg["ratio_col"]], errors="coerce")
+                idx = idx[(idx > 0) & np.isfinite(idx)]
+                if len(idx):
+                    self.condition_intercepts[key] = cfg["to_b"](float(idx.median()))
         self.update_plot()
 
     @staticmethod
@@ -472,27 +486,24 @@ class AshbyDiagramWindow(QMainWindow):
         self.invalid_bounds_notified = False
         return xmin, xmax, ymin, ymax
 
-    def build_mask(self, df, x_col, y_col):
+    def build_mask(self, df, x_col, y_col, condition_keys):
         x = pd.to_numeric(df[x_col], errors="coerce")
         y = pd.to_numeric(df[y_col], errors="coerce")
         mask = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
 
-        cfg = self.current_condition_config()
         lx = np.log10(x[mask])
         ly = np.log10(y[mask])
 
-        if cfg is not None:
-            if self.condition_intercept is None:
-                ratios = ly - cfg["m"] * lx
-                self.condition_intercept = float(np.nanmedian(ratios))
-            line_vals = cfg["m"] * lx + self.condition_intercept
+        cond_mask = pd.Series(True, index=lx.index)
+        cfg_map = self.condition_configs()
+        for key in condition_keys:
+            cfg = cfg_map[key]
+            b = self.condition_intercepts.get(key)
+            if b is None:
+                continue
+            line_vals = cfg["m"] * lx + b
             high_side = self.preference_combo.currentIndex() == 0
-            if high_side:
-                cond_mask = ly >= line_vals
-            else:
-                cond_mask = ly <= line_vals
-        else:
-            cond_mask = pd.Series(True, index=lx.index)
+            cond_mask &= (ly >= line_vals) if high_side else (ly <= line_vals)
 
         final_mask = pd.Series(False, index=df.index)
         final_mask.loc[mask.index[mask]] = cond_mask.values
@@ -589,170 +600,150 @@ class AshbyDiagramWindow(QMainWindow):
         if limits is None:
             return
 
-        x_col = "Density_kg_m3"
-        cfg = self.current_condition_config()
-        y_col = cfg["y_col"] if cfg is not None else "Youngs_Modulus_GPa"
+        condition_keys = self.selected_condition_keys()
+        if not condition_keys:
+            self.clear_plot_placeholder("Выберите хотя бы один критерий")
+            return
 
-        x, y, suitable_mask, valid_mask = self.build_mask(self.df, x_col, y_col)
+        x_col = "Density_kg_m3"
+        cfg_map = self.condition_configs()
+        y_cols = [cfg_map[k]["y_col"] for k in condition_keys]
+        mask_y_col = "Strength_MPa" if "Strength_MPa" in y_cols else "Youngs_Modulus_GPa"
+
+        _, _, suitable_mask, valid_mask = self.build_mask(self.df, x_col, mask_y_col, condition_keys)
         valid_df = self.df[valid_mask]
 
         self.figure.clear()
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor("#F8FAFC")
-        ax.set_xscale("log")
-        ax.set_yscale("log")
+        axes = self.figure.subplots(1, len(condition_keys), squeeze=False)[0]
         self.material_artists = []
         self.material_points = []
         self.hover_annotation = None
+        self.line_artists = []
 
-        x_vals = pd.to_numeric(valid_df[x_col], errors="coerce")
-        y_vals = pd.to_numeric(valid_df[y_col], errors="coerce")
-        x_vals = x_vals[(x_vals > 0) & np.isfinite(x_vals)]
-        y_vals = y_vals[(y_vals > 0) & np.isfinite(y_vals)]
-        x_lo, x_hi = float(x_vals.min()), float(x_vals.max())
-        y_lo, y_hi = float(y_vals.min()), float(y_vals.max())
-        x_margin = 10 ** 0.16
-        y_margin = 10 ** 0.16
-        x_lim = (x_lo / x_margin, x_hi * x_margin)
-        y_lim = (y_lo / y_margin, y_hi * y_margin)
-        label_points = []
-        group_bounds = []
+        for ax, key in zip(axes, condition_keys):
+            cfg = cfg_map[key]
+            y_col = cfg["y_col"]
+            xvals = pd.to_numeric(valid_df[x_col], errors="coerce")
+            yvals = pd.to_numeric(valid_df[y_col], errors="coerce")
+            pair_mask = (xvals > 0) & (yvals > 0) & np.isfinite(xvals) & np.isfinite(yvals)
+            pair_df = valid_df[pair_mask]
 
-        group_color_by_id = {}
-        group_geom_by_id = {}
-        group_patch_by_id = {}
-        subgroup_color_by_name = {}
+            ax.set_facecolor("#F8FAFC")
+            ax.set_xscale("log")
+            ax.set_yscale("log")
 
-        group_rows = self.groups_df.itertuples(index=False) if self.groups_df is not None else []
-        for i, group_row in enumerate(group_rows):
-            gname = group_row.group_name
-            gid = group_row.group_id
-            group_color_by_id[gid] = self.group_colors[i % len(self.group_colors)]
-            gdf = valid_df[valid_df["group_id"] == gid]
-            if gdf.empty:
+            if pair_df.empty:
+                ax.text(0.5, 0.5, "Нет данных", transform=ax.transAxes, ha="center", va="center")
                 continue
-            group_ok = bool(suitable_mask.loc[gdf.index].any())
-            group_alpha = 0.23 if group_ok else 0.08
-            pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
-            ggeom = self.rounded_geometry_from_log_points(pts, padding=0.028)
-            group_geom_by_id[gid] = ggeom
-            patch = self.geometry_to_patch(ggeom, color=group_color_by_id[gid], alpha=group_alpha, lw=2.0 if group_ok else 1.0, zorder=0.5)
-            if patch is not None:
+
+            x_vals = pd.to_numeric(pair_df[x_col], errors="coerce")
+            y_vals = pd.to_numeric(pair_df[y_col], errors="coerce")
+            x_lo, x_hi = float(x_vals.min()), float(x_vals.max())
+            y_lo, y_hi = float(y_vals.min()), float(y_vals.max())
+            x_margin = 10 ** 0.16
+            y_margin = 10 ** 0.16
+            x_lim = (x_lo / x_margin, x_hi * x_margin)
+            y_lim = (y_lo / y_margin, y_hi * y_margin)
+            group_bounds = []
+
+            group_color_by_id = {}
+            group_geom_by_id = {}
+            group_patch_by_id = {}
+            group_rows = self.groups_df.itertuples(index=False) if self.groups_df is not None else []
+            for i, group_row in enumerate(group_rows):
+                gid = group_row.group_id
+                group_color_by_id[gid] = self.group_colors[i % len(self.group_colors)]
+                gdf = pair_df[pair_df["group_id"] == gid]
+                if gdf.empty:
+                    continue
+                group_ok = bool(suitable_mask.loc[gdf.index].any())
+                group_alpha = 0.23 if group_ok else 0.08
+                pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
+                ggeom = self.rounded_geometry_from_log_points(pts, padding=0.028)
+                group_geom_by_id[gid] = ggeom
+                patch = self.geometry_to_patch(ggeom, color=group_color_by_id[gid], alpha=group_alpha, lw=2.0 if group_ok else 1.0, zorder=0.5)
+                if patch is not None:
+                    ax.add_patch(patch)
+                    group_patch_by_id[gid] = patch
+                    verts = patch.get_xy()
+                    group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
+
+            for _, sdf in pair_df.groupby("subgroup_name", dropna=False):
+                sub_ok = bool(suitable_mask.loc[sdf.index].any())
+                sub_alpha = 0.2 if sub_ok else 0.06
+                pts = np.column_stack((np.log10(pd.to_numeric(sdf[x_col])), np.log10(pd.to_numeric(sdf[y_col]))))
+                subgroup_group_id = sdf["group_id"].iloc[0] if len(sdf) else None
+                base_group_color = group_color_by_id.get(subgroup_group_id, "#3B5BDB")
+                subgroup_color = self.lighten_color(base_group_color, factor=0.68)
+                sgeom = self.rounded_geometry_from_log_points(pts)
+                ggeom = group_geom_by_id.get(subgroup_group_id)
+                if sgeom is not None and ggeom is not None:
+                    sgeom = sgeom.intersection(ggeom)
+                spatch = self.geometry_to_patch(sgeom, color=subgroup_color, alpha=sub_alpha, lw=1.5 if sub_ok else 0.8, zorder=1.2)
+                if spatch is not None:
+                    ax.add_patch(spatch)
+
+            for idx, row in pair_df.iterrows():
+                is_ok = bool(suitable_mask.loc[idx])
+                patch = self.material_patch(float(row[x_col]), float(row[y_col]), color="#000000")
+                group_patch = group_patch_by_id.get(row.get("group_id"))
+                if group_patch is not None:
+                    patch.set_clip_path(group_patch)
+                patch.set_alpha(0.9 if is_ok else 0.2)
                 ax.add_patch(patch)
-                group_patch_by_id[gid] = patch
-                verts = patch.get_xy()
-                group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
 
-        for sname, sdf in valid_df.groupby("subgroup_name", dropna=False):
-            sub_ok = bool(suitable_mask.loc[sdf.index].any())
-            sub_alpha = 0.2 if sub_ok else 0.06
-            pts = np.column_stack((np.log10(pd.to_numeric(sdf[x_col])), np.log10(pd.to_numeric(sdf[y_col]))))
-            subgroup_group_id = sdf["group_id"].iloc[0] if len(sdf) else None
-            base_group_color = group_color_by_id.get(subgroup_group_id, "#3B5BDB")
-            subgroup_color = self.lighten_color(base_group_color, factor=0.68)
-            subgroup_color_by_name[sname] = subgroup_color
-            sgeom = self.rounded_geometry_from_log_points(pts)
-            ggeom = group_geom_by_id.get(subgroup_group_id)
-            if sgeom is not None and ggeom is not None:
-                sgeom = sgeom.intersection(ggeom)
-            spatch = self.geometry_to_patch(sgeom, color=subgroup_color, alpha=sub_alpha, lw=1.5 if sub_ok else 0.8, zorder=1.2)
-            if spatch is not None:
-                ax.add_patch(spatch)
+            if group_bounds:
+                gx0 = min(b[0] for b in group_bounds)
+                gx1 = max(b[1] for b in group_bounds)
+                gy0 = min(b[2] for b in group_bounds)
+                gy1 = max(b[3] for b in group_bounds)
+                x_lim = (min(x_lim[0], gx0 / (10 ** 0.06)), max(x_lim[1], gx1 * (10 ** 0.06)))
+                y_lim = (min(y_lim[0], gy0 / (10 ** 0.06)), max(y_lim[1], gy1 * (10 ** 0.06)))
 
-        for idx, row in valid_df.iterrows():
-            is_ok = bool(suitable_mask.loc[idx])
-            subgroup_name = row.get("subgroup_name", "")
-            color = "#000000"
-            patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
-            group_patch = group_patch_by_id.get(row.get("group_id"))
-            if group_patch is not None:
-                patch.set_clip_path(group_patch)
-            patch.set_alpha(0.9 if is_ok else 0.2)
-            ax.add_patch(patch)
-            material_name = str(row.get("material_name", "Material"))
-            tip_text = f"{material_name}\nПодгруппа: {subgroup_name}"
-            self.material_artists.append((patch, tip_text))
-            self.material_points.append((float(row[x_col]), float(row[y_col]), tip_text))
+            b = self.condition_intercepts.get(key)
+            if b is not None:
+                xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
+                yy = 10 ** (cfg["m"] * np.log10(xx) + b)
+                line = ax.plot(xx, yy, color="#E03131", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
+                self.line_artists.append((key, ax, line))
 
-        if group_bounds:
-            gx0 = min(b[0] for b in group_bounds)
-            gx1 = max(b[1] for b in group_bounds)
-            gy0 = min(b[2] for b in group_bounds)
-            gy1 = max(b[3] for b in group_bounds)
-            x_lim = (min(x_lim[0], gx0 / (10 ** 0.06)), max(x_lim[1], gx1 * (10 ** 0.06)))
-            y_lim = (min(y_lim[0], gy0 / (10 ** 0.06)), max(y_lim[1], gy1 * (10 ** 0.06)))
-
-        if cfg is not None:
-            xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
-            yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
-            self.line_artist = ax.plot(xx, yy, color="#E03131", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
-        else:
-            self.line_artist = None
-
-        xmin, xmax, ymin, ymax = limits
-        if xmin is not None:
-            ax.axvline(xmin, color="#4CAF50", linestyle="--", linewidth=1.3)
-            ax.text(xmin, 0.98, f"X min = {xmin:g}", transform=ax.get_xaxis_transform(), color="#2E7D32", fontsize=9, ha="left", va="top")
-        if xmax is not None:
-            ax.axvline(xmax, color="#4CAF50", linestyle="--", linewidth=1.3)
-            ax.text(xmax, 0.92, f"X max = {xmax:g}", transform=ax.get_xaxis_transform(), color="#2E7D32", fontsize=9, ha="left", va="top")
-        if ymin is not None:
-            ax.axhline(ymin, color="#7E57C2", linestyle="--", linewidth=1.3)
-            ax.text(0.01, ymin, f"Y min = {ymin:g}", transform=ax.get_yaxis_transform(), color="#5E35B1", fontsize=9, ha="left", va="bottom")
-        if ymax is not None:
-            ax.axhline(ymax, color="#7E57C2", linestyle="--", linewidth=1.3)
-            ax.text(0.01, ymax, f"Y max = {ymax:g}", transform=ax.get_yaxis_transform(), color="#5E35B1", fontsize=9, ha="left", va="top")
-
-        if any(v is not None for v in [xmin, xmax, ymin, ymax]):
-            xlo = xmin if xmin is not None else x[valid_mask].min()
-            xhi = xmax if xmax is not None else x[valid_mask].max()
-            ylo = ymin if ymin is not None else y[valid_mask].min()
-            yhi = ymax if ymax is not None else y[valid_mask].max()
-            ax.fill_between([xlo, xhi], ylo, yhi, color="#00BCD4", alpha=0.08, zorder=0)
+            ax.set_xlim(*x_lim)
+            ax.set_ylim(*y_lim)
+            ax.set_xlabel("ρ — Плотность (кг/м³)", fontsize=10, color="#334155")
+            ax.set_ylabel("E — Модуль Юнга (ГПа)" if y_col == "Youngs_Modulus_GPa" else "σ — Прочность (МПа)", fontsize=10, color="#334155")
+            ax.set_title(f"Диаграмма Эшби: {cfg['label']}", fontsize=12, pad=12, color="#0F172A", weight="semibold")
+            ax.tick_params(axis="both", which="major", labelsize=9, colors="#475569")
+            for spine in ax.spines.values():
+                spine.set_color("#CBD5E1")
+            ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.38, color="#CBD5E1")
+            ax.grid(True, which="minor", linestyle="--", linewidth=0.55, alpha=0.22, color="#DCE3EE")
+            if b is not None:
+                ax.legend(loc="lower left")
 
         suitable_df = self.df[suitable_mask].copy()
         self.last_suitable_df = suitable_df
         self.counter_label.setText(f"Подходящих материалов: {len(suitable_df)}")
-
-        if cfg is not None and self.condition_intercept is not None:
-            line_val = cfg["from_b"](self.condition_intercept)
-            line_info = f"Линия {cfg['label']} = {line_val:.4g}\n(перетаскивайте линию мышью или стрелками ↑/↓, масштаб — колесом)"
-        else:
-            line_info = "Условие пока не выбрано"
         self.info_label.setText(
             f"Материалов: {len(self.df)}\n"
             f"Подходящих: {len(suitable_df)}\n"
-            f"{line_info}"
+            "Линии критериев синхронизированы между диаграммами"
         )
 
-        ax.set_xlim(*x_lim)
-        ax.set_ylim(*y_lim)
-        ax.set_xlabel("ρ — Плотность (кг/м³)", fontsize=11, color="#334155")
-        if y_col == "Youngs_Modulus_GPa":
-            ax.set_ylabel("E — Модуль Юнга (ГПа)", fontsize=11, color="#334155")
-        elif y_col == "Strength_MPa":
-            ax.set_ylabel("σ — Прочность (МПа)", fontsize=11, color="#334155")
-        else:
-            ax.set_ylabel("Свойство материала", fontsize=11, color="#334155")
-        ax.set_title("Диаграмма Эшби (логарифмический масштаб)", fontsize=13, pad=14, color="#0F172A", weight="semibold")
-        ax.tick_params(axis="both", which="major", labelsize=10, colors="#475569")
-        ax.tick_params(axis="both", which="minor", labelsize=8, colors="#94A3B8")
-        for spine in ax.spines.values():
-            spine.set_color("#CBD5E1")
-        ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.38, color="#CBD5E1")
-        ax.grid(True, which="minor", linestyle="--", linewidth=0.55, alpha=0.22, color="#DCE3EE")
-        if self.line_artist is not None:
-            ax.legend(loc="lower left")
-        self.figure.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.1)
+        self.figure.subplots_adjust(left=0.05, right=0.99, top=0.93, bottom=0.12, wspace=0.2)
         self.canvas.draw_idle()
 
-    def update_line_from_y(self, y_data, x_reference):
+    def update_line_from_y(self, criterion_key, y_data, x_reference):
         if y_data is None or y_data <= 0 or x_reference <= 0:
             return
-        cfg = self.current_condition_config()
-        if cfg is None:
+        cfg = self.condition_configs()[criterion_key]
+        old_b = self.condition_intercepts.get(criterion_key)
+        if old_b is None:
             return
-        self.condition_intercept = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
+        new_b = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
+        delta = new_b - old_b
+        for key in self.selected_condition_keys():
+            if key in self.condition_intercepts:
+                self.condition_intercepts[key] += delta
         self.update_plot()
 
     def on_press(self, event):
@@ -760,11 +751,15 @@ class AshbyDiagramWindow(QMainWindow):
             self.panning = True
             self.pan_start = (event.xdata, event.ydata, event.inaxes.get_xlim(), event.inaxes.get_ylim())
             return
-        if event.inaxes is None or self.line_artist is None:
+        if event.inaxes is None or not self.line_artists:
             return
-        contains, _ = self.line_artist.contains(event)
-        if contains and event.button == 1:
-            self.dragging_line = True
+        for key, ax, line in self.line_artists:
+            if ax is not event.inaxes:
+                continue
+            contains, _ = line.contains(event)
+            if contains and event.button == 1:
+                self.dragging_line = key
+                break
 
     def on_motion(self, event):
         if event.inaxes is None:
@@ -772,7 +767,7 @@ class AshbyDiagramWindow(QMainWindow):
         if self.dragging_line:
             xlim = event.inaxes.get_xlim()
             x_ref = np.sqrt(xlim[0] * xlim[1])
-            self.update_line_from_y(event.ydata, x_ref)
+            self.update_line_from_y(self.dragging_line, event.ydata, x_ref)
             return
         if self.panning and self.pan_start is not None:
             start_x, start_y, xlim0, ylim0 = self.pan_start
@@ -788,7 +783,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.update_material_hover(event)
 
     def on_release(self, event):
-        self.dragging_line = False
+        self.dragging_line = None
         self.panning = False
         self.pan_start = None
 
@@ -809,9 +804,11 @@ class AshbyDiagramWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def shift_condition_line(self, step):
-        if self.current_condition_config() is None:
+        selected = self.selected_condition_keys()
+        if not selected:
             return
-        self.condition_intercept = (self.condition_intercept or 0.0) + step
+        for key in selected:
+            self.condition_intercepts[key] = self.condition_intercepts.get(key, 0.0) + step
         self.update_plot()
 
     def update_material_hover(self, event):
