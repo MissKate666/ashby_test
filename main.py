@@ -759,7 +759,7 @@ class AshbyDiagramWindow(QMainWindow):
             return
         if event.inaxes is None or self.line_artist is None:
             return
-        if event.button == 1 and self.is_near_condition_line(event):
+        if event.button == 1 and self.current_condition_config() is not None:
             self.dragging_line = True
             self.drag_axis = event.inaxes
             self.drag_start_y = event.y
@@ -809,17 +809,6 @@ class AshbyDiagramWindow(QMainWindow):
         self.drag_start_intercept = None
         self.panning = False
         self.pan_start = None
-
-    def is_near_condition_line(self, event, tolerance_px=10):
-        cfg = self.current_condition_config()
-        if cfg is None or self.condition_intercept is None:
-            return False
-        if event.xdata is None or event.ydata is None or event.xdata <= 0 or event.ydata <= 0:
-            return False
-        y_line = 10 ** (cfg["m"] * np.log10(event.xdata) + self.condition_intercept)
-        p_event = event.inaxes.transData.transform((event.xdata, event.ydata))
-        p_line = event.inaxes.transData.transform((event.xdata, y_line))
-        return abs(p_event[1] - p_line[1]) <= tolerance_px
 
     def on_scroll(self, event):
         if event.inaxes is None:
