@@ -89,7 +89,9 @@ class AshbyDiagramWindow(QMainWindow):
         cond_group = QGroupBox("Условия")
         cond_layout = QFormLayout()
         self.criteria_list = QListWidget()
+        self.criteria_list.setObjectName("criteriaList")
         self.criteria_list.setSelectionMode(QListWidget.NoSelection)
+        self.criteria_list.setMinimumHeight(120)
         for key, cfg in self.condition_configs().items():
             item = QListWidgetItem(cfg["title"])
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -214,7 +216,29 @@ class AshbyDiagramWindow(QMainWindow):
                 padding: 6px 8px;
                 background: #FFFFFF;
             }
+            QListWidget#criteriaList {
+                border: 1px solid #D6DCE8;
+                border-radius: 10px;
+                background: #FFFFFF;
+                padding: 6px;
+                outline: 0;
+            }
+            QListWidget#criteriaList::item {
+                border-radius: 8px;
+                padding: 7px 8px;
+                margin: 2px 1px;
+            }
+            QListWidget#criteriaList::item:hover {
+                background: #EEF3FF;
+            }
+            QListWidget#criteriaList::item:selected {
+                background: #E4ECFF;
+                color: #1E293B;
+            }
             QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #4C6EF5;
+            }
+            QListWidget#criteriaList:focus {
                 border: 1px solid #4C6EF5;
             }
             QPushButton {
@@ -718,11 +742,11 @@ class AshbyDiagramWindow(QMainWindow):
             ax.set_ylim(*y_lim)
             ax.set_xlabel("ρ — Плотность (кг/м³)", fontsize=10, color="#334155")
             ax.set_ylabel("E — Модуль Юнга (ГПа)" if y_col == "Youngs_Modulus_GPa" else "σ — Прочность (МПа)", fontsize=10, color="#334155")
-            ax.set_title(f"Диаграмма Эшби: {cfg['label']}", fontsize=12, pad=12, color="#0F172A", weight="semibold")
+            ax.set_title(f"Диаграмма Эшби: {cfg['label']}", fontsize=12, pad=22, color="#0F172A", weight="semibold")
             criterion_count = int(criterion_mask.sum())
             ax.text(
                 0.5,
-                1.01,
+                1.0,
                 f"Подходящих материалов: {criterion_count}",
                 transform=ax.transAxes,
                 ha="center",
