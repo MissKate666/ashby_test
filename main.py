@@ -77,7 +77,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         panel = QWidget()
         panel.setObjectName("controlPanel")
-        panel.setMaximumWidth(420)
+        panel.setMaximumWidth(500)
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(16, 16, 16, 16)
         panel_layout.setSpacing(12)
@@ -127,7 +127,7 @@ class AshbyDiagramWindow(QMainWindow):
         panel_layout.addWidget(self.info_label)
         self.group_legend_label = QLabel("Цвета групп появятся после загрузки данных")
         self.group_legend_label.setWordWrap(True)
-        self.group_legend_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #1E293B;")
+        self.group_legend_label.setStyleSheet("font-size: 21px; font-weight: 700; color: #1E293B;")
         panel_layout.addWidget(self.group_legend_label)
         self.group_legend_widget = QWidget()
         self.group_legend_layout = QVBoxLayout(self.group_legend_widget)
@@ -176,7 +176,7 @@ class AshbyDiagramWindow(QMainWindow):
             QWidget {
                 background-color: #F3F6FB;
                 color: #1F2937;
-                font-size: 14px;
+                font-size: 16px;
                 font-family: "Segoe UI", "Inter", "Roboto", sans-serif;
             }
             #controlPanel, #plotPanel {
@@ -185,12 +185,12 @@ class AshbyDiagramWindow(QMainWindow):
                 border-radius: 14px;
             }
             QGroupBox {
-                font-size: 18px;
+                font-size: 21px;
                 font-weight: 700;
                 border: 1px solid #E5EAF2;
                 border-radius: 10px;
                 margin-top: 10px;
-                padding: 12px 10px 10px 10px;
+                padding: 14px 12px 12px 12px;
                 background: #FCFDFF;
             }
             QGroupBox::title {
@@ -202,7 +202,7 @@ class AshbyDiagramWindow(QMainWindow):
             QLineEdit, QComboBox {
                 border: 1px solid #D6DCE8;
                 border-radius: 8px;
-                padding: 8px 10px;
+                padding: 10px 12px;
                 background: #FFFFFF;
             }
             QLineEdit:focus, QComboBox:focus {
@@ -211,7 +211,7 @@ class AshbyDiagramWindow(QMainWindow):
             QPushButton {
                 border: 1px solid #D6DCE8;
                 border-radius: 8px;
-                padding: 9px 12px;
+                padding: 11px 14px;
                 background: #FFFFFF;
                 font-weight: 600;
             }
@@ -237,13 +237,13 @@ class AshbyDiagramWindow(QMainWindow):
             #controlPanel QComboBox,
             #controlPanel QLineEdit,
             #controlPanel QPushButton {
-                font-size: 18px;
+                font-size: 21px;
             }
             #controlPanel QGroupBox::title {
-                font-size: 19px;
+                font-size: 22px;
             }
             #controlPanel QFormLayout QLabel {
-                font-size: 17px;
+                font-size: 20px;
             }
             """
         )
@@ -315,7 +315,7 @@ class AshbyDiagramWindow(QMainWindow):
             chip = QLabel(f"<span style='color:{color}; font-size:24px;'>●</span>  {row.group_name}")
             chip.setStyleSheet(
                 "background: #F8FAFF; border: 1px solid #D8E1F2; border-radius: 10px; "
-                "padding: 10px 12px; color: #1E293B; font-size: 18px; font-weight: 600;"
+                "padding: 12px 14px; color: #1E293B; font-size: 21px; font-weight: 600;"
             )
             self.group_legend_layout.addWidget(chip)
 
@@ -981,8 +981,10 @@ class AshbyDiagramWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Предварительный просмотр подходящих материалов")
-        dlg.resize(980, 560)
+        dlg.resize(1220, 700)
         layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         table = QTableWidget()
         table.setAlternatingRowColors(True)
@@ -993,15 +995,17 @@ class AshbyDiagramWindow(QMainWindow):
                 border: 1px solid #E5EAF2;
                 gridline-color: #EEF2F7;
                 alternate-background-color: #F8FAFD;
+                font-size: 18px;
             }
             QHeaderView::section {
                 background: #EEF3FF;
                 color: #1E293B;
-                padding: 6px;
+                padding: 10px;
                 border: none;
                 border-right: 1px solid #DFE7F3;
                 border-bottom: 1px solid #DFE7F3;
-                font-weight: 600;
+                font-size: 19px;
+                font-weight: 700;
             }
             """
         )
@@ -1009,6 +1013,8 @@ class AshbyDiagramWindow(QMainWindow):
         table.setColumnCount(len(show_cols))
         table.setRowCount(len(df))
         table.setHorizontalHeaderLabels([col_titles_ru.get(col, col) for col in show_cols])
+        table.verticalHeader().setDefaultSectionSize(42)
+        table.horizontalHeader().setMinimumHeight(48)
 
         for r in range(len(df)):
             for c, col in enumerate(show_cols):
