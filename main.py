@@ -41,6 +41,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.dragging_line = False
         self.drag_axis = None
         self.drag_start_y = None
+        self.drag_start_data_y = None
         self.drag_start_intercept = None
         self.condition_intercept = None
         self.line_artist = None
@@ -763,6 +764,8 @@ class AshbyDiagramWindow(QMainWindow):
             self.dragging_line = True
             self.drag_axis = event.inaxes
             self.drag_start_y = event.y
+            _, start_data_y = event.inaxes.transData.inverted().transform((event.x, event.y))
+            self.drag_start_data_y = max(start_data_y, np.finfo(float).tiny)
             self.drag_start_intercept = self.condition_intercept if self.condition_intercept is not None else 0.0
 
     def on_motion(self, event):
@@ -779,9 +782,10 @@ class AshbyDiagramWindow(QMainWindow):
                 return
             if y0 <= 0 or y1 <= 0:
                 return
-            ly0, ly1 = np.log10(y0), np.log10(y1)
-            dlogy = (event.y - self.drag_start_y) * (ly1 - ly0) / ax.bbox.height
-            self.condition_intercept = self.drag_start_intercept + dlogy
+            _, current_data_y = ax.transData.inverted().transform((event.x, event.y))
+            current_data_y = max(current_data_y, np.finfo(float).tiny)
+            dlogy = np.log10(current_data_y) - np.log10(self.drag_start_data_y)
+            self.condition_intercept = self.drag_start_intercept + dlogy * 2.0
             self.update_plot()
             return
         if self.panning and self.pan_start is not None:
@@ -806,6 +810,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.dragging_line = False
         self.drag_axis = None
         self.drag_start_y = None
+        self.drag_start_data_y = None
         self.drag_start_intercept = None
         self.panning = False
         self.pan_start = None
