@@ -981,7 +981,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Предварительный просмотр подходящих материалов")
-        dlg.resize(1220, 700)
+        dlg.resize(1600, 760)
         layout = QVBoxLayout(dlg)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
@@ -1026,6 +1026,9 @@ class AshbyDiagramWindow(QMainWindow):
             title = col_titles_ru.get(col, col)
             min_width = header_metrics.horizontalAdvance(title) + 52
             table.setColumnWidth(idx, max(min_width, 210))
+        required_width = table.verticalHeader().width() + 36
+        required_width += sum(table.columnWidth(idx) for idx in range(table.columnCount()))
+        dlg.resize(max(1600, required_width + 40), 760)
         layout.addWidget(table)
         dlg.exec_()
 
