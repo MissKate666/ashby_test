@@ -50,7 +50,20 @@ class AshbyDiagramWindow(QMainWindow):
         self.translator = self.build_translator()
         self.translation_cache = {}
         self.last_suitable_df = pd.DataFrame()
-        self.group_colors = ["#3B5BDB", "#D9480F", "#2B8A3E", "#862E9C", "#B08900", "#0B7285", "#C2255C", "#5C940D"]
+        self.group_colors = [
+            "#1F77B4",
+            "#D62728",
+            "#2CA02C",
+            "#9467BD",
+            "#FF7F0E",
+            "#17BECF",
+            "#8C564B",
+            "#E377C2",
+            "#BCBD22",
+            "#7F7F7F",
+            "#003F5C",
+            "#FFA600",
+        ]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
             "subgroups": Path("materials_for_project/Subgroup_materials.csv"),
@@ -506,7 +519,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         return x, y, final_mask, mask
 
-    def rounded_geometry_from_log_points(self, points_log):
+    def rounded_geometry_from_log_points(self, points_log, padding=0.0):
         if len(points_log) == 0:
             return None
 
@@ -514,12 +527,12 @@ class AshbyDiagramWindow(QMainWindow):
         if len(points_log) == 1:
             geom = Point(points_log[0])
             radius = 0.055
-            rounded = geom.buffer(radius, join_style=1)
+            rounded = geom.buffer(radius + padding, join_style=1)
         elif len(points_log) == 2:
             geom = LineString(points_log)
             seg = np.linalg.norm(np.array(points_log[0]) - np.array(points_log[1]))
             radius = max(seg * 0.24, 0.045)
-            rounded = geom.buffer(radius, cap_style=1, join_style=1)
+            rounded = geom.buffer(radius + padding, cap_style=1, join_style=1)
         else:
             hull = MultiPoint(points_log).convex_hull
             if not isinstance(hull, Polygon):
@@ -527,7 +540,7 @@ class AshbyDiagramWindow(QMainWindow):
             minx, miny, maxx, maxy = hull.bounds
             radius = max((maxx - minx), (maxy - miny)) * 0.2
             radius = max(radius, 0.035)
-            rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
+            rounded = hull.buffer(radius + padding, join_style=1).buffer(-radius, join_style=1)
             smooth_radius = radius * 0.35
 
         if rounded.is_empty:
@@ -552,6 +565,14 @@ class AshbyDiagramWindow(QMainWindow):
             geom = max(geom.geoms, key=lambda g: g.area)
         if geom.geom_type != "Polygon":
             return None
+        minx, miny, maxx, maxy = geom.bounds
+        rounding = max(maxx - minx, maxy - miny) * 0.03
+        if rounding > 0:
+            geom = geom.buffer(rounding, join_style=1).buffer(-rounding, join_style=1)
+            if geom.is_empty:
+                return None
+            if geom.geom_type == "MultiPolygon":
+                geom = max(geom.geoms, key=lambda g: g.area)
         coords = np.array(geom.exterior.coords)
         coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
         return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor=color, alpha=alpha, linewidth=lw, zorder=zorder)
@@ -618,7 +639,7 @@ class AshbyDiagramWindow(QMainWindow):
             group_ok = bool(suitable_mask.loc[gdf.index].any())
             group_alpha = 0.23 if group_ok else 0.08
             pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
-            ggeom = self.rounded_geometry_from_log_points(pts)
+            ggeom = self.rounded_geometry_from_log_points(pts, padding=0.028)
             group_geom_by_id[gid] = ggeom
             patch = self.geometry_to_patch(ggeom, color=group_color_by_id[gid], alpha=group_alpha, lw=2.0 if group_ok else 1.0, zorder=0.5)
             if patch is not None:
@@ -738,7 +759,7 @@ class AshbyDiagramWindow(QMainWindow):
     def on_press(self, event):
         if event.button == 2 and event.inaxes is not None:
             self.panning = True
-            self.pan_start = (event.xdata, event.ydata, event.inaxes.get_xlim(), event.inaxes.get_ylim())
+            self.pan_start = (event.x, event.y, event.inaxes.get_xlim(), event.inaxes.get_ylim())
             return
         if event.inaxes is None or self.line_artist is None:
             return
@@ -754,15 +775,20 @@ class AshbyDiagramWindow(QMainWindow):
             x_ref = np.sqrt(xlim[0] * xlim[1])
             self.update_line_from_y(event.ydata, x_ref)
             return
-        if self.panning and self.pan_start is not None and event.xdata and event.ydata:
-            start_x, start_y, xlim0, ylim0 = self.pan_start
-            if start_x > 0 and start_y > 0:
-                dx = np.log10(event.xdata) - np.log10(start_x)
-                dy = np.log10(event.ydata) - np.log10(start_y)
-                new_xlim = (10 ** (np.log10(xlim0[0]) - dx), 10 ** (np.log10(xlim0[1]) - dx))
-                new_ylim = (10 ** (np.log10(ylim0[0]) - dy), 10 ** (np.log10(ylim0[1]) - dy))
-                event.inaxes.set_xlim(*new_xlim)
-                event.inaxes.set_ylim(*new_ylim)
+        if self.panning and self.pan_start is not None:
+            start_px_x, start_px_y, xlim0, ylim0 = self.pan_start
+            ax = event.inaxes
+            if ax.bbox.width > 0 and ax.bbox.height > 0:
+                dx_px = event.x - start_px_x
+                dy_px = event.y - start_px_y
+                lx0, lx1 = np.log10(xlim0[0]), np.log10(xlim0[1])
+                ly0, ly1 = np.log10(ylim0[0]), np.log10(ylim0[1])
+                dlogx = dx_px * (lx1 - lx0) / ax.bbox.width
+                dlogy = dy_px * (ly1 - ly0) / ax.bbox.height
+                new_xlim = (10 ** (lx0 - dlogx), 10 ** (lx1 - dlogx))
+                new_ylim = (10 ** (ly0 - dlogy), 10 ** (ly1 - dlogy))
+                ax.set_xlim(*new_xlim)
+                ax.set_ylim(*new_ylim)
                 self.canvas.draw_idle()
             return
         self.update_material_hover(event)
@@ -797,6 +823,7 @@ class AshbyDiagramWindow(QMainWindow):
             if contains:
                 self.hover_annotation.xy = (event.xdata, event.ydata)
                 self.hover_annotation.set_text(name)
+                self.adjust_hover_position(event, name)
                 self.hover_annotation.set_visible(True)
                 found = True
                 break
@@ -810,11 +837,27 @@ class AshbyDiagramWindow(QMainWindow):
             if dist < 0.06:
                 self.hover_annotation.xy = (nearest[0], nearest[1])
                 self.hover_annotation.set_text(nearest[2])
+                self.adjust_hover_position(event, nearest[2])
                 self.hover_annotation.set_visible(True)
                 found = True
         if not found and self.hover_annotation.get_visible():
             self.hover_annotation.set_visible(False)
         self.canvas.draw_idle()
+
+    def adjust_hover_position(self, event, text):
+        ax = event.inaxes
+        if ax is None:
+            return
+        lines = max(1, text.count("\n") + 1)
+        est_width = min(320, max(160, len(text) * 4))
+        est_height = 38 + lines * 16
+
+        right_space = ax.bbox.x1 - event.x
+        top_space = ax.bbox.y1 - event.y
+
+        dx = 14 if right_space > est_width else -(est_width // 2)
+        dy = 14 if top_space > est_height else -(est_height // 2)
+        self.hover_annotation.set_position((dx, dy))
 
     def place_non_overlapping_label(self, ax, x, y, text, existing_points, fontsize=8, weight="normal", alpha=0.8, zorder=5):
         anchor_px = ax.transData.transform((x, y))
