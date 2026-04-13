@@ -40,6 +40,8 @@ class AshbyDiagramWindow(QMainWindow):
         self.group_map = None
         self.dragging_line = False
         self.drag_axis = None
+        self.drag_start_y = None
+        self.drag_start_intercept = None
         self.condition_intercept = None
         self.line_artist = None
         self.hover_annotation = None
@@ -51,7 +53,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.translator = self.build_translator()
         self.translation_cache = {}
         self.last_suitable_df = pd.DataFrame()
-        self.group_colors = ["#0057B8", "#D7191C", "#2E8B57", "#00A6D6", "#F2B705", "#111111", "#7FDBFF", "#39FF14", "#B8B8FF", "#8C1D40"]
+        self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
             "subgroups": Path("materials_for_project/Subgroup_materials.csv"),
@@ -61,7 +63,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.load_default_data()
 
     def init_ui(self):
-        self.setWindowTitle("Ashby Selector")
+        self.setWindowTitle("Селектор Эшби")
         self.setGeometry(100, 80, 1450, 900)
         self.setFocusPolicy(Qt.StrongFocus)
         self.apply_modern_theme()
@@ -657,7 +659,7 @@ class AshbyDiagramWindow(QMainWindow):
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
             subgroup_name = row.get("subgroup_name", "")
-            color = "#8B5E3C"
+            color = "#000000"
             patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
             group_patch = group_patch_by_id.get(row.get("group_id"))
             if group_patch is not None:
@@ -729,7 +731,7 @@ class AshbyDiagramWindow(QMainWindow):
             ax.set_ylabel("σ — Прочность (МПа)", fontsize=11, color="#334155")
         else:
             ax.set_ylabel("Свойство материала", fontsize=11, color="#334155")
-        ax.set_title("Ashby диаграмма (логарифмический масштаб)", fontsize=13, pad=14, color="#0F172A", weight="semibold")
+        ax.set_title("Диаграмма Эшби (логарифмический масштаб)", fontsize=13, pad=14, color="#0F172A", weight="semibold")
         ax.tick_params(axis="both", which="major", labelsize=10, colors="#475569")
         ax.tick_params(axis="both", which="minor", labelsize=8, colors="#94A3B8")
         for spine in ax.spines.values():
@@ -761,6 +763,8 @@ class AshbyDiagramWindow(QMainWindow):
         if contains and event.button == 1:
             self.dragging_line = True
             self.drag_axis = event.inaxes
+            self.drag_start_y = event.y
+            self.drag_start_intercept = self.condition_intercept if self.condition_intercept is not None else 0.0
 
     def on_motion(self, event):
         if event.inaxes is None and not self.dragging_line:
@@ -769,11 +773,13 @@ class AshbyDiagramWindow(QMainWindow):
             ax = self.drag_axis if self.drag_axis is not None else event.inaxes
             if ax is None:
                 return
-            _, y_data = ax.transData.inverted().transform((event.x, event.y))
-            y_data = max(y_data, np.finfo(float).tiny)
-            xlim = ax.get_xlim()
-            x_ref = np.sqrt(xlim[0] * xlim[1])
-            self.update_line_from_y(y_data, x_ref)
+            if ax.bbox.height <= 0:
+                return
+            y0, y1 = ax.get_ylim()
+            ly0, ly1 = np.log10(y0), np.log10(y1)
+            dlogy = (event.y - self.drag_start_y) * (ly1 - ly0) / ax.bbox.height
+            self.condition_intercept = self.drag_start_intercept + dlogy
+            self.update_plot()
             return
         if self.panning and self.pan_start is not None:
             start_px_x, start_px_y, xlim0, ylim0 = self.pan_start
@@ -796,6 +802,8 @@ class AshbyDiagramWindow(QMainWindow):
     def on_release(self, event):
         self.dragging_line = False
         self.drag_axis = None
+        self.drag_start_y = None
+        self.drag_start_intercept = None
         self.panning = False
         self.pan_start = None
 
@@ -841,8 +849,8 @@ class AshbyDiagramWindow(QMainWindow):
             if contains:
                 self.hover_annotation.xy = (event.xdata, event.ydata)
                 self.hover_annotation.set_text(name)
-                self.adjust_hover_position(event, name)
                 self.hover_annotation.set_visible(True)
+                self.adjust_hover_position(event, name)
                 found = True
                 break
         if not found and event.xdata and event.ydata and self.material_points:
@@ -855,8 +863,8 @@ class AshbyDiagramWindow(QMainWindow):
             if dist < 0.06:
                 self.hover_annotation.xy = (nearest[0], nearest[1])
                 self.hover_annotation.set_text(nearest[2])
-                self.adjust_hover_position(event, nearest[2])
                 self.hover_annotation.set_visible(True)
+                self.adjust_hover_position(event, nearest[2])
                 found = True
         if not found and self.hover_annotation.get_visible():
             self.hover_annotation.set_visible(False)
@@ -867,28 +875,33 @@ class AshbyDiagramWindow(QMainWindow):
         if ax is None:
             return
         lines = max(1, text.count("\n") + 1)
-        est_width = min(320, max(160, len(text) * 4))
-        est_height = 38 + lines * 16
-
-        left_space = event.x - ax.bbox.x0
-        right_space = ax.bbox.x1 - event.x
-        bottom_space = event.y - ax.bbox.y0
-        top_space = ax.bbox.y1 - event.y
-
-        if right_space > est_width:
-            dx = 14
-        elif left_space > est_width:
-            dx = -int(est_width * 0.55)
-        else:
-            dx = -min(40, est_width // 4)
-
-        if top_space > est_height:
-            dy = 14
-        elif bottom_space > est_height:
-            dy = -int(est_height * 0.55)
-        else:
-            dy = -min(30, est_height // 4)
+        dx = 14
+        dy = 14 if event.y < (ax.bbox.y0 + ax.bbox.y1) / 2 else -(22 + lines * 6)
         self.hover_annotation.set_position((dx, dy))
+
+        renderer = self.canvas.get_renderer()
+        if renderer is None:
+            return
+        ann_box = self.hover_annotation.get_window_extent(renderer=renderer)
+        bounds = ax.bbox
+        pad = 6
+        shift_x = 0
+        shift_y = 0
+
+        if ann_box.x1 > bounds.x1 - pad:
+            shift_x = (bounds.x1 - pad) - ann_box.x1
+        elif ann_box.x0 < bounds.x0 + pad:
+            shift_x = (bounds.x0 + pad) - ann_box.x0
+
+        if ann_box.y1 > bounds.y1 - pad:
+            shift_y = (bounds.y1 - pad) - ann_box.y1
+        elif ann_box.y0 < bounds.y0 + pad:
+            shift_y = (bounds.y0 + pad) - ann_box.y0
+
+        if shift_x or shift_y:
+            ox, oy = self.hover_annotation.get_position()
+            to_pt = 72.0 / self.figure.dpi
+            self.hover_annotation.set_position((ox + shift_x * to_pt, oy + shift_y * to_pt))
 
     def place_non_overlapping_label(self, ax, x, y, text, existing_points, fontsize=8, weight="normal", alpha=0.8, zorder=5):
         anchor_px = ax.transData.transform((x, y))
@@ -962,6 +975,17 @@ class AshbyDiagramWindow(QMainWindow):
             "SqrtE_over_rho",
         ]
         show_cols = [c for c in preview_cols if c in self.last_suitable_df.columns]
+        col_titles_ru = {
+            "material_name": "Материал",
+            "group_name": "Группа",
+            "subgroup_name": "Подгруппа",
+            "Density_kg_m3": "Плотность, кг/м³",
+            "Youngs_Modulus_GPa": "Модуль Юнга, ГПа",
+            "Strength_MPa": "Прочность, МПа",
+            "E_over_rho": "E/ρ",
+            "Strength_over_rho": "σ/ρ",
+            "SqrtE_over_rho": "√E/ρ",
+        }
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Предварительный просмотр подходящих материалов")
@@ -992,7 +1016,7 @@ class AshbyDiagramWindow(QMainWindow):
         df = self.last_suitable_df[show_cols].reset_index(drop=True)
         table.setColumnCount(len(show_cols))
         table.setRowCount(len(df))
-        table.setHorizontalHeaderLabels(show_cols)
+        table.setHorizontalHeaderLabels([col_titles_ru.get(col, col) for col in show_cols])
 
         for r in range(len(df)):
             for c, col in enumerate(show_cols):
