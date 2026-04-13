@@ -49,6 +49,10 @@ class AshbyDiagramWindow(QMainWindow):
         self.invalid_bounds_notified = False
         self.translator = self.build_translator()
         self.translation_cache = {}
+        self.translation_overrides = {
+            "Glasses": "Стекло",
+            "Natural": "Природные",
+        }
         self.last_suitable_df = pd.DataFrame()
         self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
         self.default_paths = {
@@ -366,6 +370,8 @@ class AshbyDiagramWindow(QMainWindow):
             text = str(value).strip()
             if not text:
                 return value
+            if text in self.translation_overrides:
+                return self.translation_overrides[text]
             if text in self.translation_cache:
                 return self.translation_cache[text]
             try:
