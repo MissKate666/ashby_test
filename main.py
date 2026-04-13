@@ -50,6 +50,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.translator = self.build_translator()
         self.translation_cache = {}
         self.last_suitable_df = pd.DataFrame()
+        self.group_colors = ["#3B5BDB", "#D9480F", "#2B8A3E", "#862E9C", "#B08900", "#0B7285", "#C2255C", "#5C940D"]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
             "subgroups": Path("materials_for_project/Subgroup_materials.csv"),
@@ -129,6 +130,10 @@ class AshbyDiagramWindow(QMainWindow):
         self.info_label = QLabel("Данные не загружены")
         self.info_label.setWordWrap(True)
         panel_layout.addWidget(self.info_label)
+        self.group_legend_label = QLabel("Цвета групп появятся после загрузки данных")
+        self.group_legend_label.setWordWrap(True)
+        self.group_legend_label.setStyleSheet("font-size: 12px; color: #334155;")
+        panel_layout.addWidget(self.group_legend_label)
         panel_layout.addStretch(1)
 
         plot_panel = QWidget()
@@ -266,9 +271,20 @@ class AshbyDiagramWindow(QMainWindow):
 
             self.df = merged.reset_index(drop=True)
             self.info_label.setText(f"Загружено материалов: {len(self.df)}")
+            self.update_group_legend()
             self.clear_plot_placeholder("Выберите критерий, чтобы построить диаграмму")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить данные:\n{e}")
+
+    def update_group_legend(self):
+        if self.groups_df is None or self.groups_df.empty:
+            self.group_legend_label.setText("Цвета групп недоступны")
+            return
+        lines = ["<b>Цвета групп:</b>"]
+        for i, row in enumerate(self.groups_df.itertuples(index=False)):
+            color = self.group_colors[i % len(self.group_colors)]
+            lines.append(f"<span style='color:{color};'>●</span> {row.group_name}")
+        self.group_legend_label.setText("<br>".join(lines))
 
     def clear_plot_placeholder(self, message):
         self.figure.clear()
@@ -469,33 +485,48 @@ class AshbyDiagramWindow(QMainWindow):
 
         return x, y, final_mask, mask
 
-    def rounded_patch_from_log_points(self, points_log, color, alpha, lw=1.2, zorder=2):
+    def rounded_geometry_from_log_points(self, points_log):
         if len(points_log) == 0:
             return None
 
         if len(points_log) == 1:
             geom = Point(points_log[0])
-            radius = 0.04
+            radius = 0.055
             rounded = geom.buffer(radius, join_style=1)
         elif len(points_log) == 2:
             geom = LineString(points_log)
             seg = np.linalg.norm(np.array(points_log[0]) - np.array(points_log[1]))
-            radius = max(seg * 0.18, 0.03)
+            radius = max(seg * 0.24, 0.045)
             rounded = geom.buffer(radius, cap_style=1, join_style=1)
         else:
             hull = MultiPoint(points_log).convex_hull
             if not isinstance(hull, Polygon):
                 return None
             minx, miny, maxx, maxy = hull.bounds
-            radius = max((maxx - minx), (maxy - miny)) * 0.14
-            radius = max(radius, 0.02)
+            radius = max((maxx - minx), (maxy - miny)) * 0.2
+            radius = max(radius, 0.035)
             rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
 
         if rounded.is_empty:
             return None
         if rounded.geom_type == "MultiPolygon":
             rounded = max(rounded.geoms, key=lambda g: g.area)
-        coords = np.array(rounded.exterior.coords)
+        return rounded
+
+    def rounded_patch_from_log_points(self, points_log, color, alpha, lw=1.2, zorder=2):
+        rounded = self.rounded_geometry_from_log_points(points_log)
+        if rounded is None:
+            return None
+        return self.geometry_to_patch(rounded, color=color, alpha=alpha, lw=lw, zorder=zorder)
+
+    def geometry_to_patch(self, geom, color, alpha, lw=1.2, zorder=2):
+        if geom is None or geom.is_empty:
+            return None
+        if geom.geom_type == "MultiPolygon":
+            geom = max(geom.geoms, key=lambda g: g.area)
+        if geom.geom_type != "Polygon":
+            return None
+        coords = np.array(geom.exterior.coords)
         coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
         return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor=color, alpha=alpha, linewidth=lw, zorder=zorder)
 
@@ -546,35 +577,28 @@ class AshbyDiagramWindow(QMainWindow):
         label_points = []
         group_bounds = []
 
-        group_colors = ["#3B5BDB", "#D9480F", "#2B8A3E", "#862E9C", "#B08900", "#0B7285", "#C2255C", "#5C940D"]
         group_color_by_id = {}
+        group_geom_by_id = {}
+        subgroup_color_by_name = {}
 
         group_rows = self.groups_df.itertuples(index=False) if self.groups_df is not None else []
         for i, group_row in enumerate(group_rows):
             gname = group_row.group_name
             gid = group_row.group_id
-            group_color_by_id[gid] = group_colors[i % len(group_colors)]
+            group_color_by_id[gid] = self.group_colors[i % len(self.group_colors)]
             gdf = valid_df[valid_df["group_id"] == gid]
             if gdf.empty:
                 continue
             group_ok = bool(suitable_mask.loc[gdf.index].any())
             group_alpha = 0.23 if group_ok else 0.08
             pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
-            patch = self.rounded_patch_from_log_points(
-                pts,
-                color=group_color_by_id[gid],
-                alpha=group_alpha,
-                lw=2.0 if group_ok else 1.0,
-                zorder=0.5,
-            )
+            ggeom = self.rounded_geometry_from_log_points(pts)
+            group_geom_by_id[gid] = ggeom
+            patch = self.geometry_to_patch(ggeom, color=group_color_by_id[gid], alpha=group_alpha, lw=2.0 if group_ok else 1.0, zorder=0.5)
             if patch is not None:
                 ax.add_patch(patch)
                 verts = patch.get_xy()
                 group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
-                center = np.nanmedian(10 ** pts[:, 0]), np.nanmedian(10 ** pts[:, 1])
-                self.place_non_overlapping_label(
-                    ax, center[0], center[1], str(gname), label_points, fontsize=9, weight="bold", alpha=0.95 if group_ok else 0.45, zorder=5
-                )
 
         for sname, sdf in valid_df.groupby("subgroup_name", dropna=False):
             sub_ok = bool(suitable_mask.loc[sdf.index].any())
@@ -583,13 +607,12 @@ class AshbyDiagramWindow(QMainWindow):
             subgroup_group_id = sdf["group_id"].iloc[0] if len(sdf) else None
             base_group_color = group_color_by_id.get(subgroup_group_id, "#3B5BDB")
             subgroup_color = self.lighten_color(base_group_color, factor=0.68)
-            spatch = self.rounded_patch_from_log_points(
-                pts,
-                color=subgroup_color,
-                alpha=sub_alpha,
-                lw=1.5 if sub_ok else 0.8,
-                zorder=1.2,
-            )
+            subgroup_color_by_name[sname] = subgroup_color
+            sgeom = self.rounded_geometry_from_log_points(pts)
+            ggeom = group_geom_by_id.get(subgroup_group_id)
+            if sgeom is not None and ggeom is not None:
+                sgeom = sgeom.intersection(ggeom)
+            spatch = self.geometry_to_patch(sgeom, color=subgroup_color, alpha=sub_alpha, lw=1.5 if sub_ok else 0.8, zorder=1.2)
             if spatch is not None:
                 ax.add_patch(spatch)
                 if sub_ok:
@@ -600,12 +623,15 @@ class AshbyDiagramWindow(QMainWindow):
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
-            color = "#111111"
+            subgroup_name = row.get("subgroup_name", "")
+            color = subgroup_color_by_name.get(subgroup_name, "#111111")
             patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
             patch.set_alpha(0.9 if is_ok else 0.2)
             ax.add_patch(patch)
-            self.material_artists.append((patch, str(row.get("material_name", "Material"))))
-            self.material_points.append((float(row[x_col]), float(row[y_col]), str(row.get("material_name", "Material"))))
+            material_name = str(row.get("material_name", "Material"))
+            tip_text = f"{material_name}\nПодгруппа: {subgroup_name}"
+            self.material_artists.append((patch, tip_text))
+            self.material_points.append((float(row[x_col]), float(row[y_col]), tip_text))
 
         if group_bounds:
             gx0 = min(b[0] for b in group_bounds)
