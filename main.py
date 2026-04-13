@@ -50,7 +50,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.translator = self.build_translator()
         self.translation_cache = {}
         self.last_suitable_df = pd.DataFrame()
-        self.group_colors = ["#3B5BDB", "#D9480F", "#2B8A3E", "#862E9C", "#B08900", "#0B7285", "#C2255C", "#5C940D"]
+        self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
             "subgroups": Path("materials_for_project/Subgroup_materials.csv"),
@@ -60,8 +60,9 @@ class AshbyDiagramWindow(QMainWindow):
         self.load_default_data()
 
     def init_ui(self):
-        self.setWindowTitle("Ashby Selector")
+        self.setWindowTitle("Селектор Эшби")
         self.setGeometry(100, 80, 1450, 900)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.apply_modern_theme()
 
         central = QWidget()
@@ -117,16 +118,6 @@ class AshbyDiagramWindow(QMainWindow):
         self.preview_btn.clicked.connect(self.open_preview)
         panel_layout.addWidget(self.preview_btn)
 
-        zoom_row = QHBoxLayout()
-        self.zoom_in_btn = QPushButton("+")
-        self.zoom_out_btn = QPushButton("-")
-        self.zoom_in_btn.clicked.connect(lambda: self.zoom_plot(0.85))
-        self.zoom_out_btn.clicked.connect(lambda: self.zoom_plot(1.18))
-        zoom_row.addWidget(QLabel("Масштаб:"))
-        zoom_row.addWidget(self.zoom_in_btn)
-        zoom_row.addWidget(self.zoom_out_btn)
-        panel_layout.addLayout(zoom_row)
-
         self.info_label = QLabel("Данные не загружены")
         self.info_label.setWordWrap(True)
         panel_layout.addWidget(self.info_label)
@@ -146,6 +137,16 @@ class AshbyDiagramWindow(QMainWindow):
         plot_layout = QVBoxLayout(plot_panel)
         plot_layout.setContentsMargins(18, 16, 18, 16)
         plot_layout.setSpacing(10)
+        zoom_row = QHBoxLayout()
+        self.zoom_in_btn = QPushButton("+")
+        self.zoom_out_btn = QPushButton("-")
+        self.zoom_in_btn.clicked.connect(lambda: self.zoom_plot(0.85))
+        self.zoom_out_btn.clicked.connect(lambda: self.zoom_plot(1.18))
+        zoom_row.addWidget(QLabel("Масштаб:"))
+        zoom_row.addWidget(self.zoom_in_btn)
+        zoom_row.addWidget(self.zoom_out_btn)
+        zoom_row.addStretch(1)
+        plot_layout.addLayout(zoom_row)
         self.counter_label = QLabel("Подходящих материалов: 0")
         self.counter_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
@@ -300,7 +301,7 @@ class AshbyDiagramWindow(QMainWindow):
                 w.deleteLater()
         for i, row in enumerate(self.groups_df.itertuples(index=False)):
             color = self.group_colors[i % len(self.group_colors)]
-            chip = QLabel(f"<span style='color:{color}; font-size:18px;'>●</span>  {row.group_name}")
+            chip = QLabel(f"<span style='color:{color}; font-size:24px;'>●</span>  {row.group_name}")
             chip.setStyleSheet(
                 "background: #F8FAFF; border: 1px solid #D8E1F2; border-radius: 10px; "
                 "padding: 8px 10px; color: #1E293B; font-size: 15px; font-weight: 600;"
@@ -506,7 +507,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         return x, y, final_mask, mask
 
-    def rounded_geometry_from_log_points(self, points_log):
+    def rounded_geometry_from_log_points(self, points_log, padding=0.0):
         if len(points_log) == 0:
             return None
 
@@ -514,12 +515,12 @@ class AshbyDiagramWindow(QMainWindow):
         if len(points_log) == 1:
             geom = Point(points_log[0])
             radius = 0.055
-            rounded = geom.buffer(radius, join_style=1)
+            rounded = geom.buffer(radius + padding, join_style=1)
         elif len(points_log) == 2:
             geom = LineString(points_log)
             seg = np.linalg.norm(np.array(points_log[0]) - np.array(points_log[1]))
             radius = max(seg * 0.24, 0.045)
-            rounded = geom.buffer(radius, cap_style=1, join_style=1)
+            rounded = geom.buffer(radius + padding, cap_style=1, join_style=1)
         else:
             hull = MultiPoint(points_log).convex_hull
             if not isinstance(hull, Polygon):
@@ -527,7 +528,7 @@ class AshbyDiagramWindow(QMainWindow):
             minx, miny, maxx, maxy = hull.bounds
             radius = max((maxx - minx), (maxy - miny)) * 0.2
             radius = max(radius, 0.035)
-            rounded = hull.buffer(radius, join_style=1).buffer(-radius, join_style=1)
+            rounded = hull.buffer(radius + padding, join_style=1).buffer(-radius, join_style=1)
             smooth_radius = radius * 0.35
 
         if rounded.is_empty:
@@ -552,6 +553,14 @@ class AshbyDiagramWindow(QMainWindow):
             geom = max(geom.geoms, key=lambda g: g.area)
         if geom.geom_type != "Polygon":
             return None
+        minx, miny, maxx, maxy = geom.bounds
+        rounding = max(maxx - minx, maxy - miny) * 0.03
+        if rounding > 0:
+            geom = geom.buffer(rounding, join_style=1).buffer(-rounding, join_style=1)
+            if geom.is_empty:
+                return None
+            if geom.geom_type == "MultiPolygon":
+                geom = max(geom.geoms, key=lambda g: g.area)
         coords = np.array(geom.exterior.coords)
         coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
         return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor=color, alpha=alpha, linewidth=lw, zorder=zorder)
@@ -605,6 +614,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         group_color_by_id = {}
         group_geom_by_id = {}
+        group_patch_by_id = {}
         subgroup_color_by_name = {}
 
         group_rows = self.groups_df.itertuples(index=False) if self.groups_df is not None else []
@@ -618,11 +628,12 @@ class AshbyDiagramWindow(QMainWindow):
             group_ok = bool(suitable_mask.loc[gdf.index].any())
             group_alpha = 0.23 if group_ok else 0.08
             pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
-            ggeom = self.rounded_geometry_from_log_points(pts)
+            ggeom = self.rounded_geometry_from_log_points(pts, padding=0.028)
             group_geom_by_id[gid] = ggeom
             patch = self.geometry_to_patch(ggeom, color=group_color_by_id[gid], alpha=group_alpha, lw=2.0 if group_ok else 1.0, zorder=0.5)
             if patch is not None:
                 ax.add_patch(patch)
+                group_patch_by_id[gid] = patch
                 verts = patch.get_xy()
                 group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
 
@@ -645,8 +656,11 @@ class AshbyDiagramWindow(QMainWindow):
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
             subgroup_name = row.get("subgroup_name", "")
-            color = "#8B5E3C"
+            color = "#000000"
             patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
+            group_patch = group_patch_by_id.get(row.get("group_id"))
+            if group_patch is not None:
+                patch.set_clip_path(group_patch)
             patch.set_alpha(0.9 if is_ok else 0.2)
             ax.add_patch(patch)
             material_name = str(row.get("material_name", "Material"))
@@ -696,7 +710,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         if cfg is not None and self.condition_intercept is not None:
             line_val = cfg["from_b"](self.condition_intercept)
-            line_info = f"Линия {cfg['label']} = {line_val:.4g}\n(можно двигать мышью вверх/вниз и колесом)"
+            line_info = f"Линия {cfg['label']} = {line_val:.4g}\n(перетаскивайте линию мышью или стрелками ↑/↓, масштаб — колесом)"
         else:
             line_info = "Условие пока не выбрано"
         self.info_label.setText(
@@ -714,7 +728,7 @@ class AshbyDiagramWindow(QMainWindow):
             ax.set_ylabel("σ — Прочность (МПа)", fontsize=11, color="#334155")
         else:
             ax.set_ylabel("Свойство материала", fontsize=11, color="#334155")
-        ax.set_title("Ashby диаграмма (логарифмический масштаб)", fontsize=13, pad=14, color="#0F172A", weight="semibold")
+        ax.set_title("Диаграмма Эшби (логарифмический масштаб)", fontsize=13, pad=14, color="#0F172A", weight="semibold")
         ax.tick_params(axis="both", which="major", labelsize=10, colors="#475569")
         ax.tick_params(axis="both", which="minor", labelsize=8, colors="#94A3B8")
         for spine in ax.spines.values():
@@ -754,9 +768,9 @@ class AshbyDiagramWindow(QMainWindow):
             x_ref = np.sqrt(xlim[0] * xlim[1])
             self.update_line_from_y(event.ydata, x_ref)
             return
-        if self.panning and self.pan_start is not None and event.xdata and event.ydata:
+        if self.panning and self.pan_start is not None:
             start_x, start_y, xlim0, ylim0 = self.pan_start
-            if start_x > 0 and start_y > 0:
+            if start_x and start_y and start_x > 0 and start_y > 0 and event.xdata and event.ydata:
                 dx = np.log10(event.xdata) - np.log10(start_x)
                 dy = np.log10(event.ydata) - np.log10(start_y)
                 new_xlim = (10 ** (np.log10(xlim0[0]) - dx), 10 ** (np.log10(xlim0[1]) - dx))
@@ -775,7 +789,22 @@ class AshbyDiagramWindow(QMainWindow):
     def on_scroll(self, event):
         if event.inaxes is None:
             return
-        step = 0.04 if event.button == "up" else -0.04
+        self.zoom_plot(0.88 if event.button == "up" else 1.14)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Up:
+            self.shift_condition_line(+0.04)
+            event.accept()
+            return
+        if event.key() == Qt.Key_Down:
+            self.shift_condition_line(-0.04)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def shift_condition_line(self, step):
+        if self.current_condition_config() is None:
+            return
         self.condition_intercept = (self.condition_intercept or 0.0) + step
         self.update_plot()
 
@@ -788,7 +817,9 @@ class AshbyDiagramWindow(QMainWindow):
                 textcoords="offset points",
                 bbox=dict(boxstyle="round,pad=0.55", fc="white", alpha=0.96, ec="#CBD5E1", lw=1.0),
                 fontsize=11,
+                zorder=30,
             )
+            self.hover_annotation.set_clip_on(False)
             self.hover_annotation.set_visible(False)
 
         found = False
@@ -798,6 +829,7 @@ class AshbyDiagramWindow(QMainWindow):
                 self.hover_annotation.xy = (event.xdata, event.ydata)
                 self.hover_annotation.set_text(name)
                 self.hover_annotation.set_visible(True)
+                self.adjust_hover_position(event, name)
                 found = True
                 break
         if not found and event.xdata and event.ydata and self.material_points:
@@ -811,10 +843,44 @@ class AshbyDiagramWindow(QMainWindow):
                 self.hover_annotation.xy = (nearest[0], nearest[1])
                 self.hover_annotation.set_text(nearest[2])
                 self.hover_annotation.set_visible(True)
+                self.adjust_hover_position(event, nearest[2])
                 found = True
         if not found and self.hover_annotation.get_visible():
             self.hover_annotation.set_visible(False)
         self.canvas.draw_idle()
+
+    def adjust_hover_position(self, event, text):
+        ax = event.inaxes
+        if ax is None:
+            return
+        lines = max(1, text.count("\n") + 1)
+        dx = 14
+        dy = 14 if event.y < (ax.bbox.y0 + ax.bbox.y1) / 2 else -(22 + lines * 6)
+        self.hover_annotation.set_position((dx, dy))
+
+        renderer = self.canvas.get_renderer()
+        if renderer is None:
+            return
+        ann_box = self.hover_annotation.get_window_extent(renderer=renderer)
+        bounds = ax.bbox
+        pad = 6
+        shift_x = 0
+        shift_y = 0
+
+        if ann_box.x1 > bounds.x1 - pad:
+            shift_x = (bounds.x1 - pad) - ann_box.x1
+        elif ann_box.x0 < bounds.x0 + pad:
+            shift_x = (bounds.x0 + pad) - ann_box.x0
+
+        if ann_box.y1 > bounds.y1 - pad:
+            shift_y = (bounds.y1 - pad) - ann_box.y1
+        elif ann_box.y0 < bounds.y0 + pad:
+            shift_y = (bounds.y0 + pad) - ann_box.y0
+
+        if shift_x or shift_y:
+            ox, oy = self.hover_annotation.get_position()
+            to_pt = 72.0 / self.figure.dpi
+            self.hover_annotation.set_position((ox + shift_x * to_pt, oy + shift_y * to_pt))
 
     def place_non_overlapping_label(self, ax, x, y, text, existing_points, fontsize=8, weight="normal", alpha=0.8, zorder=5):
         anchor_px = ax.transData.transform((x, y))
@@ -888,6 +954,17 @@ class AshbyDiagramWindow(QMainWindow):
             "SqrtE_over_rho",
         ]
         show_cols = [c for c in preview_cols if c in self.last_suitable_df.columns]
+        col_titles_ru = {
+            "material_name": "Материал",
+            "group_name": "Группа",
+            "subgroup_name": "Подгруппа",
+            "Density_kg_m3": "Плотность, кг/м³",
+            "Youngs_Modulus_GPa": "Модуль Юнга, ГПа",
+            "Strength_MPa": "Прочность, МПа",
+            "E_over_rho": "E/ρ",
+            "Strength_over_rho": "σ/ρ",
+            "SqrtE_over_rho": "√E/ρ",
+        }
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Предварительный просмотр подходящих материалов")
@@ -918,7 +995,7 @@ class AshbyDiagramWindow(QMainWindow):
         df = self.last_suitable_df[show_cols].reset_index(drop=True)
         table.setColumnCount(len(show_cols))
         table.setRowCount(len(df))
-        table.setHorizontalHeaderLabels(show_cols)
+        table.setHorizontalHeaderLabels([col_titles_ru.get(col, col) for col in show_cols])
 
         for r in range(len(df)):
             for c, col in enumerate(show_cols):
