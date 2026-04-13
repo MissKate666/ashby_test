@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QListWidget,
     QListWidgetItem,
     QVBoxLayout,
@@ -56,6 +57,7 @@ class AshbyDiagramWindow(QMainWindow):
             "Natural": "Природные",
         }
         self.last_suitable_df = pd.DataFrame()
+        self.last_suitable_by_criterion = {}
         self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
@@ -328,6 +330,7 @@ class AshbyDiagramWindow(QMainWindow):
         ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12, color="#666666", transform=ax.transAxes)
         self.counter_label.setText("Подходящих материалов: 0")
         self.last_suitable_df = pd.DataFrame()
+        self.last_suitable_by_criterion = {}
         self.canvas.draw_idle()
 
     @staticmethod
@@ -610,8 +613,8 @@ class AshbyDiagramWindow(QMainWindow):
         y_cols = [cfg_map[k]["y_col"] for k in condition_keys]
         mask_y_col = "Strength_MPa" if "Strength_MPa" in y_cols else "Youngs_Modulus_GPa"
 
-        _, _, suitable_mask, valid_mask = self.build_mask(self.df, x_col, mask_y_col, condition_keys)
-        valid_df = self.df[valid_mask]
+        _, _, suitable_mask, _ = self.build_mask(self.df, x_col, mask_y_col, condition_keys)
+        self.last_suitable_by_criterion = {}
 
         self.figure.clear()
         axes = self.figure.subplots(1, len(condition_keys), squeeze=False)[0]
@@ -623,10 +626,14 @@ class AshbyDiagramWindow(QMainWindow):
         for ax, key in zip(axes, condition_keys):
             cfg = cfg_map[key]
             y_col = cfg["y_col"]
-            xvals = pd.to_numeric(valid_df[x_col], errors="coerce")
-            yvals = pd.to_numeric(valid_df[y_col], errors="coerce")
+            _, _, criterion_mask, criterion_valid_mask = self.build_mask(self.df, x_col, y_col, [key])
+            criterion_df = self.df[criterion_valid_mask]
+            self.last_suitable_by_criterion[key] = self.df[criterion_mask].copy()
+
+            xvals = pd.to_numeric(criterion_df[x_col], errors="coerce")
+            yvals = pd.to_numeric(criterion_df[y_col], errors="coerce")
             pair_mask = (xvals > 0) & (yvals > 0) & np.isfinite(xvals) & np.isfinite(yvals)
-            pair_df = valid_df[pair_mask]
+            pair_df = criterion_df[pair_mask]
 
             ax.set_facecolor("#F8FAFC")
             ax.set_xscale("log")
@@ -656,7 +663,7 @@ class AshbyDiagramWindow(QMainWindow):
                 gdf = pair_df[pair_df["group_id"] == gid]
                 if gdf.empty:
                     continue
-                group_ok = bool(suitable_mask.loc[gdf.index].any())
+                group_ok = bool(criterion_mask.loc[gdf.index].any())
                 group_alpha = 0.23 if group_ok else 0.08
                 pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
                 ggeom = self.rounded_geometry_from_log_points(pts, padding=0.028)
@@ -669,7 +676,7 @@ class AshbyDiagramWindow(QMainWindow):
                     group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
 
             for _, sdf in pair_df.groupby("subgroup_name", dropna=False):
-                sub_ok = bool(suitable_mask.loc[sdf.index].any())
+                sub_ok = bool(criterion_mask.loc[sdf.index].any())
                 sub_alpha = 0.2 if sub_ok else 0.06
                 pts = np.column_stack((np.log10(pd.to_numeric(sdf[x_col])), np.log10(pd.to_numeric(sdf[y_col]))))
                 subgroup_group_id = sdf["group_id"].iloc[0] if len(sdf) else None
@@ -684,7 +691,7 @@ class AshbyDiagramWindow(QMainWindow):
                     ax.add_patch(spatch)
 
             for idx, row in pair_df.iterrows():
-                is_ok = bool(suitable_mask.loc[idx])
+                is_ok = bool(criterion_mask.loc[idx])
                 patch = self.material_patch(float(row[x_col]), float(row[y_col]), color="#000000")
                 group_patch = group_patch_by_id.get(row.get("group_id"))
                 if group_patch is not None:
@@ -712,6 +719,18 @@ class AshbyDiagramWindow(QMainWindow):
             ax.set_xlabel("ρ — Плотность (кг/м³)", fontsize=10, color="#334155")
             ax.set_ylabel("E — Модуль Юнга (ГПа)" if y_col == "Youngs_Modulus_GPa" else "σ — Прочность (МПа)", fontsize=10, color="#334155")
             ax.set_title(f"Диаграмма Эшби: {cfg['label']}", fontsize=12, pad=12, color="#0F172A", weight="semibold")
+            criterion_count = int(criterion_mask.sum())
+            ax.text(
+                0.5,
+                1.01,
+                f"Подходящих материалов: {criterion_count}",
+                transform=ax.transAxes,
+                ha="center",
+                va="bottom",
+                fontsize=10,
+                color="#0F172A",
+                weight="semibold",
+            )
             ax.tick_params(axis="both", which="major", labelsize=9, colors="#475569")
             for spine in ax.spines.values():
                 spine.set_color("#CBD5E1")
@@ -941,7 +960,12 @@ class AshbyDiagramWindow(QMainWindow):
             self.canvas.draw_idle()
 
     def open_preview(self):
-        if self.last_suitable_df is None or self.last_suitable_df.empty:
+        selected_keys = self.selected_condition_keys()
+        if not selected_keys:
+            QMessageBox.information(self, "Предпросмотр", "Сначала выберите критерии.")
+            return
+
+        if not self.last_suitable_by_criterion or all(self.last_suitable_by_criterion.get(k, pd.DataFrame()).empty for k in selected_keys):
             QMessageBox.information(self, "Предпросмотр", "Подходящих материалов нет.")
             return
 
@@ -975,8 +999,7 @@ class AshbyDiagramWindow(QMainWindow):
         layout = QVBoxLayout(dlg)
 
         table = QTableWidget()
-        table.setAlternatingRowColors(True)
-        table.setStyleSheet(
+        table_style = (
             """
             QTableWidget {
                 background: #FFFFFF;
@@ -995,18 +1018,42 @@ class AshbyDiagramWindow(QMainWindow):
             }
             """
         )
-        df = self.last_suitable_df[show_cols].reset_index(drop=True)
-        table.setColumnCount(len(show_cols))
-        table.setRowCount(len(df))
-        table.setHorizontalHeaderLabels([col_titles_ru.get(col, col) for col in show_cols])
-
-        for r in range(len(df)):
-            for c, col in enumerate(show_cols):
-                table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
-
-        table.resizeColumnsToContents()
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        layout.addWidget(table)
+        if len(selected_keys) == 1:
+            key = selected_keys[0]
+            df = self.last_suitable_by_criterion.get(key, pd.DataFrame())[show_cols].reset_index(drop=True)
+            table.setAlternatingRowColors(True)
+            table.setStyleSheet(table_style)
+            table.setColumnCount(len(show_cols))
+            table.setRowCount(len(df))
+            table.setHorizontalHeaderLabels([col_titles_ru.get(col, col) for col in show_cols])
+            for r in range(len(df)):
+                for c, col in enumerate(show_cols):
+                    table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
+            table.resizeColumnsToContents()
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            layout.addWidget(table)
+        else:
+            tabs = QTabWidget()
+            cfg_map = self.condition_configs()
+            for key in selected_keys:
+                df_src = self.last_suitable_by_criterion.get(key, pd.DataFrame())
+                df = df_src[show_cols].reset_index(drop=True) if not df_src.empty else pd.DataFrame(columns=show_cols)
+                page = QWidget()
+                page_layout = QVBoxLayout(page)
+                page_table = QTableWidget()
+                page_table.setAlternatingRowColors(True)
+                page_table.setStyleSheet(table_style)
+                page_table.setColumnCount(len(show_cols))
+                page_table.setRowCount(len(df))
+                page_table.setHorizontalHeaderLabels([col_titles_ru.get(col, col) for col in show_cols])
+                for r in range(len(df)):
+                    for c, col in enumerate(show_cols):
+                        page_table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
+                page_table.resizeColumnsToContents()
+                page_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+                page_layout.addWidget(page_table)
+                tabs.addTab(page, cfg_map[key]["title"])
+            layout.addWidget(tabs)
         dlg.exec_()
 
 
