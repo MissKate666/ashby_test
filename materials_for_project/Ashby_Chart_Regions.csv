@@ -1,0 +1,9 @@
+label,x_center,y_center,bubble_size,color,description
+Glasses,0.02,220,4200,#f4c542,Brittle glasses with low toughness and moderate strength
+Wood,0.2,20,3400,#2ca58d,Natural wood materials with anisotropic behavior
+Polymers,1.0,50,3800,#ff6b6b,Commodity and engineering polymers
+Elastomers,0.03,3.0,3000,#ff9f1c,Highly deformable elastomers with low strength
+Foams,0.008,1.2,2800,#9ad1d4,Ultra-light foams with low strength and toughness
+Ceramics,0.005,8.0,3200,#d9b38c,Ceramics with high stiffness but low fracture toughness
+Metals & alloys,5.0,500,5200,#8e7cc3,Structural metals and alloys with balanced properties
+Composites,20.0,1000,5600,#b4a7d6,High-performance composites with excellent property combinations
