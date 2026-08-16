@@ -1,0 +1,9 @@
+group_name,x_center,y_center,width,height,angle,color,toughness_kJ_m2,strength_MPa,notes
+Foams,0.035,1.5,0.12,5.0,28,#cddc72,0.035,1.5,Primary Ashby region
+Natural materials,0.35,8,1.10,18.0,22,#8fd19e,0.35,8,Primary Ashby region
+Polymers,1.25,22,1.70,26.0,8,#8cc6df,1.25,22,Primary Ashby region
+Elastomers,1.05,5.5,0.90,10.0,10,#9ab6e8,1.05,5.5,Primary Ashby region
+Composites,1.80,120,1.00,180.0,10,#c7a0d8,1.8,120,Primary Ashby region
+Ceramics,4.50,160,3.20,290.0,8,#efe76a,4.5,160,Primary Ashby region
+Glasses,2.80,85,1.60,120.0,6,#f3c65a,2.8,85,Primary Ashby region
+Metals,18.0,120,24.0,220.0,0,#ee8f8f,18,120,Primary Ashby region
