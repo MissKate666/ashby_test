@@ -1,0 +1,1 @@
+export default function GroupLegend({groups=[]}){return <div className="flex flex-wrap gap-2">{groups.map(g=><span key={g.id} className="px-2 py-1 rounded-full bg-white border text-xs"><i className="inline-block w-3 h-3 rounded-full mr-1" style={{background:g.color}}/>{g.name}</span>)}</div>}

@@ -1,0 +1,1 @@
+export default function Header(){return <header className="p-3 md:p-4 bg-slate-950 text-white"><h1 className="text-xl md:text-2xl font-bold">Интерактивная диаграмма Эшби</h1><p className="text-slate-300 text-sm">FastAPI + React + D3.js</p></header>}

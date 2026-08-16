@@ -1,0 +1,2 @@
+import { useEffect, useState } from 'react';import { analyze } from '../services/api';
+export function useDiagramData(params){const [state,setState]=useState({loading:true,error:null,data:null});useEffect(()=>{let ok=true;setState(s=>({...s,loading:true,error:null}));analyze(params).then(data=>ok&&setState({loading:false,error:null,data})).catch(e=>ok&&setState({loading:false,error:e.response?.data?.detail||e.message,data:null}));return()=>{ok=false}},[JSON.stringify(params)]);return state;}
