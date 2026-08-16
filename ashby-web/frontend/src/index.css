@@ -1,0 +1,2 @@
+@tailwind base;@tailwind components;@tailwind utilities;
+html,body,#root{height:100%;margin:0} body{font-size:clamp(14px,1.3vw,16px);background:#f8fafc}.touch-target{min-height:44px}.input{border:1px solid #cbd5e1;border-radius:.6rem;padding:.55rem .7rem;min-height:44px;background:white}.btn{min-height:44px;border-radius:.75rem;padding:.6rem .9rem;font-weight:700}.panel{background:white;border:1px solid #e2e8f0;border-radius:1rem;box-shadow:0 8px 28px rgb(15 23 42 / .08)}

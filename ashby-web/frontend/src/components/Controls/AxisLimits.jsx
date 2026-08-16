@@ -1,0 +1,2 @@
+const fields=[['x_min','X min'],['x_max','X max'],['y_min','Y min'],['y_max','Y max']];
+export default function AxisLimits({params,setParams}){return <div className="grid grid-cols-2 gap-2">{fields.map(([k,l])=><label key={k} className="text-sm">{l}<input className="input w-full" type="number" step="any" value={params[k]??''} onChange={e=>setParams({...params,[k]:e.target.value?Number(e.target.value):undefined})}/></label>)}</div>}
