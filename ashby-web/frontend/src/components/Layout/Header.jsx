@@ -1,1 +1,2 @@
+import React from 'react';
 export default function Header({onMenu}){return <header className="flex items-center justify-between gap-3 rounded-2xl bg-white p-3 shadow-sm md:p-4"><div><h1 className="text-xl font-black md:text-2xl">Интерактивная диаграмма Эшби</h1><p className="text-sm text-slate-500">FastAPI + React + D3.js</p></div><button onClick={onMenu} className="btn-secondary lg:hidden">☰</button></header>}
