@@ -1,2 +1,81 @@
-@tailwind base; @tailwind components; @tailwind utilities;
-:root{font-family:Inter,system-ui,sans-serif;color:#0f172a;background:#eef2f7} body{margin:0}.touch-target{min-height:44px}.panel-label{@apply text-sm font-semibold text-slate-700}.panel-input{@apply touch-target w-full rounded-xl border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none}.btn{@apply touch-target rounded-xl px-4 py-2 font-bold shadow-sm transition}.btn-primary{@apply btn bg-blue-700 text-white hover:bg-blue-800}.btn-secondary{@apply btn border border-slate-300 bg-white hover:bg-slate-50}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --black: rgb(22, 19, 31);
+  --light-pink: rgb(240, 217, 228);
+  --pink: rgb(193, 160, 172);
+  --funkie-friday: rgb(74, 63, 75);
+  --moonspace: rgb(128, 108, 121);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--black);
+  background: var(--light-pink);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 14% 12%, rgba(193, 160, 172, 0.72), transparent 26rem),
+    radial-gradient(circle at 86% 6%, rgba(128, 108, 121, 0.28), transparent 22rem),
+    linear-gradient(135deg, var(--light-pink), var(--light-pink));
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  background-image:
+    linear-gradient(rgba(74, 63, 75, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(74, 63, 75, 0.08) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(circle at center, black, transparent 78%);
+}
+
+::selection { background: var(--funkie-friday); color: var(--light-pink); }
+
+.touch-target { min-height: 44px; }
+
+.panel-label {
+  @apply text-sm font-black tracking-wide;
+  color: var(--black);
+}
+
+.panel-input {
+  @apply touch-target w-full rounded-2xl px-4 py-3 font-semibold shadow-sm transition focus:outline-none;
+  color: var(--black);
+  background: rgba(240, 217, 228, 0.72);
+  border: 1px solid rgba(74, 63, 75, 0.24);
+  box-shadow: inset 0 1px 0 rgba(240, 217, 228, 0.72), 0 10px 22px rgba(74, 63, 75, 0.09);
+}
+
+.panel-input:focus {
+  border-color: var(--funkie-friday);
+  box-shadow: 0 0 0 4px rgba(128, 108, 121, 0.24), 0 14px 26px rgba(74, 63, 75, 0.14);
+}
+
+.btn {
+  @apply touch-target rounded-2xl px-4 py-2 font-black shadow-sm transition;
+  border: 1px solid rgba(74, 63, 75, 0.2);
+}
+
+.btn-primary {
+  @apply btn;
+  color: var(--light-pink);
+  background: linear-gradient(135deg, var(--funkie-friday), var(--black));
+}
+
+.btn-primary:hover { transform: translateY(-1px); background: var(--black); }
+
+.btn-secondary {
+  @apply btn;
+  color: var(--black);
+  background: rgba(240, 217, 228, 0.78);
+}
+
+.btn-secondary:hover { transform: translateY(-1px); background: var(--pink); }
