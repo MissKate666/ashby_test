@@ -1,0 +1,2 @@
+import React from 'react';
+export default function GroupLegend({groups=[]}){const uniq=groups.filter(g=>g.kind==='group');return <div className="absolute right-3 top-3 max-h-40 overflow-auto rounded-2xl bg-white/90 p-2 text-xs shadow md:max-h-64">{uniq.map(g=><div key={g.id} className="flex items-center gap-2 whitespace-nowrap"><span className="h-3 w-3 rounded-full" style={{background:g.color}} />{g.name}</div>)}</div>}
