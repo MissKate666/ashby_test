@@ -97,7 +97,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.index_value_input.setPlaceholderText("выберите критерий")
         self.index_value_input.setEnabled(False)
         self.index_value_validator = QDoubleValidator()
-        self.index_value_validator.setNotation(QDoubleValidator.StandardNotation)
+        self.index_value_validator.setNotation(QDoubleValidator.ScientificNotation)
         self.index_value_validator.setLocale(QLocale.c())
         self.index_value_validator.setDecimals(6)
         self.index_value_input.setValidator(self.index_value_validator)
@@ -762,6 +762,9 @@ class AshbyDiagramWindow(QMainWindow):
     def on_scroll(self, event):
         if event.inaxes is None:
             return
+        if self.line_artist is not None and self.line_artist.contains(event)[0]:
+            self.shift_condition_line(+0.04 if event.button == "up" else -0.04)
+            return
         self.zoom_plot(0.88 if event.button == "up" else 1.14)
 
     def keyPressEvent(self, event):
@@ -776,9 +779,15 @@ class AshbyDiagramWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def shift_condition_line(self, step):
-        if self.current_condition_config() is None:
+        cfg = self.current_condition_config()
+        if cfg is None:
             return
-        self.condition_intercept = (self.condition_intercept or 0.0) + step
+        intercept = (self.condition_intercept or 0.0) + step
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            intercept = max(cfg["to_b"](lo), min(cfg["to_b"](hi), intercept))
+        self.condition_intercept = intercept
         self.update_plot()
 
     def update_material_hover(self, event):
