@@ -1,4 +1,5 @@
 import React, {useEffect, useMemo, useState} from 'react';
+import {useApp} from '../../context/AppContext';
 
 const columns = [
   ['name', 'Материал'],
@@ -10,6 +11,7 @@ const columns = [
 ];
 
 export default function MaterialsPreviewModal({open, onClose, points}) {
+  const {hiddenGroups} = useApp();
   const [sortKey, setSortKey] = useState('name');
   const [sortDir, setSortDir] = useState('asc');
 
@@ -21,7 +23,10 @@ export default function MaterialsPreviewModal({open, onClose, points}) {
   }, [open, onClose]);
 
   const rows = useMemo(() => {
-    const list = (points || []).filter(p => p.is_suitable);
+    // Hiding a group in the legend is a display filter on the chart; the preview
+    // table is another view of the same materials, so it must respect the same
+    // hidden groups instead of listing materials the user just hid.
+    const list = (points || []).filter(p => p.is_suitable && !hiddenGroups.has(p.group));
     list.sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
       const cmp = typeof av === 'number' && typeof bv === 'number'
@@ -30,7 +35,7 @@ export default function MaterialsPreviewModal({open, onClose, points}) {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return list;
-  }, [points, sortKey, sortDir]);
+  }, [points, hiddenGroups, sortKey, sortDir]);
 
   if (!open) return null;
 

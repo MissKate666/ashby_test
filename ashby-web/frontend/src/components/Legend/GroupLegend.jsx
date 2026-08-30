@@ -8,7 +8,7 @@ export default function GroupLegend({groups = []}) {
   const uniq = groups.filter(g => g.kind === 'group');
 
   return (
-    <div className="absolute right-6 top-6 max-h-52 overflow-auto rounded-[1.25rem] border border-[rgba(74,63,75,0.16)] bg-[rgba(240,217,228,0.88)] p-3 text-xs font-bold text-[rgb(22,19,31)] shadow-[0_18px_42px_rgba(74,63,75,0.16)] backdrop-blur md:max-h-64">
+    <div className="absolute right-6 top-6 z-30 max-h-52 overflow-auto rounded-[1.25rem] border border-[rgba(74,63,75,0.16)] bg-[rgba(240,217,228,0.88)] p-3 text-xs font-bold text-[rgb(22,19,31)] shadow-[0_18px_42px_rgba(74,63,75,0.16)] backdrop-blur md:max-h-64">
       {uniq.length > 1 && (
         <div className="mb-2 flex gap-2">
           <button
