@@ -92,7 +92,7 @@ export default function LineValueControl({condition, data}) {
     : `Допустимый диапазон: ${formatValue(range[0])} — ${formatValue(range[1])}`;
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="pointer-events-auto flex flex-col gap-1">
       <div className="flex items-center gap-2 rounded-full bg-[rgba(240,217,228,0.86)] px-3 py-2 text-xs font-black text-[rgb(22,19,31)] shadow">
         <span className="whitespace-nowrap">Индекс:</span>
         <input
