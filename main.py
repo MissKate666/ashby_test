@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.patches import Polygon as MplPolygon
-from PyQt5.QtCore import QLocale, Qt
+from PyQt5.QtCore import QLocale, Qt, QTimer
 from PyQt5.QtGui import QDoubleValidator
 from PyQt5.QtWidgets import (
     QApplication,
@@ -52,6 +52,17 @@ class AshbyDiagramWindow(QMainWindow):
         self.panning = False
         self.pan_start = None
         self.invalid_bounds_notified = False
+        self._drag_ax = None
+        self._drag_cfg = None
+        self._drag_x_col = None
+        self._drag_y_col = None
+        self._drag_group_cache = {}
+        self._drag_subgroup_cache = {}
+        self._drag_material_cache = []
+        self._pending_drag_position = None
+        self._drag_timer = QTimer(self)
+        self._drag_timer.setSingleShot(True)
+        self._drag_timer.timeout.connect(self._process_drag_frame)
         self.translator = MaterialTranslator()
         self.last_suitable_df = pd.DataFrame()
         self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
@@ -91,6 +102,7 @@ class AshbyDiagramWindow(QMainWindow):
 
         self.index_value_input = QLineEdit()
         self.index_value_input.setPlaceholderText("выберите критерий")
+        self.index_value_input.setToolTip("Нет данных для расчёта диапазона")
         self.index_value_input.setEnabled(False)
         self.index_value_validator = QDoubleValidator()
         self.index_value_validator.setNotation(QDoubleValidator.ScientificNotation)
@@ -406,12 +418,13 @@ class AshbyDiagramWindow(QMainWindow):
     def refresh_index_value_controls(self):
         """Sync the field/Reset button/validator range/tooltip to the current criterion,
         filters and auto/manual state. Called on every redraw so it never goes stale."""
+        no_range_tooltip = "Нет данных для расчёта диапазона"
         cfg = self.current_condition_config()
         if cfg is None:
             self.index_value_input.setEnabled(False)
             self.index_reset_btn.setEnabled(False)
             self.index_value_input.setPlaceholderText("выберите критерий")
-            self.index_value_input.setToolTip("")
+            self.index_value_input.setToolTip(no_range_tooltip)
             if not self.index_value_input.hasFocus():
                 self.index_value_input.clear()
             return
@@ -422,10 +435,10 @@ class AshbyDiagramWindow(QMainWindow):
             lo, hi = rng
             self.index_value_validator.setRange(lo, hi, 6)
             self.index_value_input.setPlaceholderText("Авто (вычисляется по данным)")
-            self.index_value_input.setToolTip(f"Допустимый диапазон: {lo:.4g} – {hi:.4g}")
+            self.index_value_input.setToolTip(f"Допустимый диапазон: {lo:.4g} — {hi:.4g}")
         else:
             self.index_value_input.setPlaceholderText("нет данных")
-            self.index_value_input.setToolTip("")
+            self.index_value_input.setToolTip(no_range_tooltip)
         if not self.index_value_input.hasFocus():
             if self.index_manual_value is not None:
                 self.index_value_input.setText(f"{self.index_manual_value:.6g}")
@@ -634,6 +647,9 @@ class AshbyDiagramWindow(QMainWindow):
         self.material_artists = []
         self.material_points = []
         self.hover_annotation = None
+        self._drag_group_cache = {}
+        self._drag_subgroup_cache = {}
+        self._drag_material_cache = []
 
         x_vals = pd.to_numeric(valid_df[x_col], errors="coerce")
         y_vals = pd.to_numeric(valid_df[y_col], errors="coerce")
@@ -670,6 +686,7 @@ class AshbyDiagramWindow(QMainWindow):
             if patch is not None:
                 ax.add_patch(patch)
                 group_patch_by_id[gid] = patch
+                self._drag_group_cache[gid] = (patch, gdf.index)
                 verts = patch.get_xy()
                 group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
 
@@ -688,6 +705,7 @@ class AshbyDiagramWindow(QMainWindow):
             spatch = self.geometry_to_patch(sgeom, color=subgroup_color, alpha=sub_alpha, lw=1.5 if sub_ok else 0.8, zorder=1.2)
             if spatch is not None:
                 ax.add_patch(spatch)
+                self._drag_subgroup_cache[sname] = (spatch, sdf.index)
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
@@ -703,6 +721,7 @@ class AshbyDiagramWindow(QMainWindow):
             tip_text = f"{material_name}\nПодгруппа: {subgroup_name}"
             self.material_artists.append((patch, tip_text))
             self.material_points.append((float(row[x_col]), float(row[y_col]), tip_text))
+            self._drag_material_cache.append((patch, idx))
 
         if group_bounds:
             gx0 = min(b[0] for b in group_bounds)
@@ -741,23 +760,7 @@ class AshbyDiagramWindow(QMainWindow):
             ax.fill_between([xlo, xhi], ylo, yhi, color="#00BCD4", alpha=0.08, zorder=0)
 
         suitable_df = self.df[suitable_mask].copy()
-        self.last_suitable_df = suitable_df
-        self.counter_label.setText(f"Подходящих материалов: {len(suitable_df)}")
-
-        if cfg is not None and self.condition_intercept is not None:
-            line_val = cfg["from_b"](self.condition_intercept)
-            mode_suffix = " (авто)" if self.index_manual_value is None else ""
-            line_info = f"Линия {cfg['label']} = {line_val:.4g}{mode_suffix}"
-            if self.line_artist is not None:
-                self.line_artist.set_label(f"Условие {cfg['label']} = {line_val:.4g}{mode_suffix}")
-        else:
-            line_info = "Условие пока не выбрано"
-        self.refresh_index_value_controls()
-        self.info_label.setText(
-            f"Материалов: {len(self.df)}\n"
-            f"Подходящих: {len(suitable_df)}\n"
-            f"{line_info}"
-        )
+        self._update_status_labels(suitable_df, cfg)
 
         ax.set_xlim(*x_lim)
         ax.set_ylim(*y_lim)
@@ -778,14 +781,21 @@ class AshbyDiagramWindow(QMainWindow):
         if self.line_artist is not None:
             ax.legend(loc="lower left")
         self.figure.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.1)
+        self._drag_ax = ax
+        self._drag_cfg = cfg
+        self._drag_x_col = x_col
+        self._drag_y_col = y_col
         self.canvas.draw_idle()
 
-    def update_line_from_y(self, y_data, x_reference):
+    def _apply_line_value(self, y_data, x_reference):
+        """Pure calc: resolve a dragged y position into the (clamped) index value and
+        the matching log-space intercept, without touching the plot. Returns False if
+        the position can't be resolved (e.g. the mouse left the valid log-scale area)."""
         if y_data is None or y_data <= 0 or x_reference <= 0:
-            return
+            return False
         cfg = self.current_condition_config()
         if cfg is None:
-            return
+            return False
         intercept = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
         value = cfg["from_b"](intercept)
         rng = self.index_value_range()
@@ -793,7 +803,97 @@ class AshbyDiagramWindow(QMainWindow):
             lo, hi = rng
             value = max(lo, min(hi, value))
         self.index_manual_value = value
-        self.update_plot()
+        self.condition_intercept = cfg["to_b"](value)
+        return True
+
+    def update_line_from_y(self, y_data, x_reference):
+        if self._apply_line_value(y_data, x_reference):
+            self.update_plot()
+
+    def _schedule_drag_frame(self):
+        """requestAnimationFrame-style coalescing: at most one redraw per ~16ms frame,
+        always using the latest pending mouse position so a slow frame never leaves the
+        line lagging behind and only catching up on mouse release."""
+        if not self._drag_timer.isActive():
+            self._drag_timer.start(16)
+
+    def _process_drag_frame(self):
+        if self._pending_drag_position is None:
+            return
+        y_data, x_reference = self._pending_drag_position
+        self._pending_drag_position = None
+        if self._apply_line_value(y_data, x_reference):
+            self._refresh_line_fast()
+
+    def _update_status_labels(self, suitable_df, cfg):
+        self.last_suitable_df = suitable_df
+        self.counter_label.setText(f"Подходящих материалов: {len(suitable_df)}")
+
+        if cfg is not None and self.condition_intercept is not None:
+            line_val = cfg["from_b"](self.condition_intercept)
+            mode_suffix = " (авто)" if self.index_manual_value is None else ""
+            line_info = f"Линия {cfg['label']} = {line_val:.4g}{mode_suffix}"
+            if self.line_artist is not None:
+                self.line_artist.set_label(f"Условие {cfg['label']} = {line_val:.4g}{mode_suffix}")
+        else:
+            line_info = "Условие пока не выбрано"
+        self.refresh_index_value_controls()
+        self.info_label.setText(
+            f"Материалов: {len(self.df)}\n"
+            f"Подходящих: {len(suitable_df)}\n"
+            f"{line_info}"
+        )
+
+    def _refresh_line_fast(self):
+        """Live-drag redraw: reuses the group/subgroup/material patches cached by the
+        last full update_plot() and only recomputes what actually changes while the
+        line moves (suitability + line position), instead of clearing the figure and
+        rebuilding every shapely blob from scratch on every mouse-move event."""
+        cfg = self.current_condition_config()
+        if (
+            self.df is None
+            or cfg is None
+            or self._drag_ax is None
+            or self._drag_cfg is None
+            or cfg["label"] != self._drag_cfg["label"]
+            or self.condition_intercept is None
+        ):
+            self.update_plot()
+            return
+
+        x, y, suitable_mask, valid_mask = self.build_mask(self.df, self._drag_x_col, self._drag_y_col)
+
+        for gid, (patch, idx) in self._drag_group_cache.items():
+            ok = bool(suitable_mask.loc[idx].any())
+            patch.set_alpha(0.23 if ok else 0.08)
+            patch.set_linewidth(2.0 if ok else 1.0)
+
+        for sname, (patch, idx) in self._drag_subgroup_cache.items():
+            ok = bool(suitable_mask.loc[idx].any())
+            patch.set_alpha(0.2 if ok else 0.06)
+            patch.set_linewidth(1.5 if ok else 0.8)
+
+        for patch, idx in self._drag_material_cache:
+            is_ok = bool(suitable_mask.loc[idx])
+            patch.set_alpha(0.9 if is_ok else 0.2)
+
+        ax = self._drag_ax
+        x_lim = ax.get_xlim()
+        xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
+        yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
+        if self.line_artist is not None:
+            self.line_artist.set_data(xx, yy)
+            line_val = cfg["from_b"](self.condition_intercept)
+            mode_suffix = " (авто)" if self.index_manual_value is None else ""
+            label = f"Условие {cfg['label']} = {line_val:.4g}{mode_suffix}"
+            self.line_artist.set_label(label)
+            legend = ax.get_legend()
+            if legend is not None and legend.get_texts():
+                legend.get_texts()[0].set_text(label)
+
+        suitable_df = self.df[suitable_mask].copy()
+        self._update_status_labels(suitable_df, cfg)
+        self.canvas.draw_idle()
 
     def on_press(self, event):
         if event.button == 2 and event.inaxes is not None:
@@ -812,7 +912,8 @@ class AshbyDiagramWindow(QMainWindow):
         if self.dragging_line:
             xlim = event.inaxes.get_xlim()
             x_ref = np.sqrt(xlim[0] * xlim[1])
-            self.update_line_from_y(event.ydata, x_ref)
+            self._pending_drag_position = (event.ydata, x_ref)
+            self._schedule_drag_frame()
             return
         if self.panning and self.pan_start is not None:
             start_x, start_y, xlim0, ylim0 = self.pan_start
@@ -828,9 +929,14 @@ class AshbyDiagramWindow(QMainWindow):
         self.update_material_hover(event)
 
     def on_release(self, event):
+        was_dragging = self.dragging_line
         self.dragging_line = False
         self.panning = False
         self.pan_start = None
+        if was_dragging:
+            self._drag_timer.stop()
+            self._pending_drag_position = None
+            self.update_plot()
 
     def on_scroll(self, event):
         if event.inaxes is None:
