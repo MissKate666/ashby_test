@@ -44,6 +44,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.group_map = None
         self.dragging_line = False
         self.condition_intercept = None
+        self.index_manual_value = None
         self.line_artist = None
         self.hover_annotation = None
         self.material_artists = []
@@ -102,7 +103,17 @@ class AshbyDiagramWindow(QMainWindow):
         self.index_value_validator.setDecimals(6)
         self.index_value_input.setValidator(self.index_value_validator)
         self.index_value_input.editingFinished.connect(self.on_index_value_edited)
-        cond_layout.addRow("Значение индекса:", self.index_value_input)
+        self.index_reset_btn = QPushButton("Сброс")
+        self.index_reset_btn.setToolTip("Вернуться к автоматическому значению (медиана по данным)")
+        self.index_reset_btn.setEnabled(False)
+        self.index_reset_btn.clicked.connect(self.on_index_reset)
+        index_row = QHBoxLayout()
+        index_row.setContentsMargins(0, 0, 0, 0)
+        index_row.addWidget(self.index_value_input)
+        index_row.addWidget(self.index_reset_btn)
+        index_row_widget = QWidget()
+        index_row_widget.setLayout(index_row)
+        cond_layout.addRow("Значение индекса:", index_row_widget)
 
         cond_group.setLayout(cond_layout)
         panel_layout.addWidget(cond_group)
@@ -347,40 +358,86 @@ class AshbyDiagramWindow(QMainWindow):
             return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
         return None
 
-    def index_ratio_values(self):
+    def filtered_ratio_values(self):
+        """Ratio-column values (E/rho, sigma/rho or sqrtE/rho, matching the current
+        criterion) for materials that satisfy the current axis-range filters, so both the
+        valid input range and the "auto" median stay in sync with those filters."""
         ratio_col = self.RATIO_COLUMNS.get(self.condition_combo.currentIndex())
         if ratio_col is None or self.df is None or ratio_col not in self.df.columns:
             return None
-        ratios = pd.to_numeric(self.df[ratio_col], errors="coerce")
+        x = pd.to_numeric(self.df["Density_kg_m3"], errors="coerce")
+        cfg = self.current_condition_config()
+        y_col = cfg["y_col"] if cfg is not None else "Youngs_Modulus_GPa"
+        y = pd.to_numeric(self.df[y_col], errors="coerce")
+        valid = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
+        xmin = self.parse_optional_float(self.x_min_input)
+        xmax = self.parse_optional_float(self.x_max_input)
+        ymin = self.parse_optional_float(self.y_min_input)
+        ymax = self.parse_optional_float(self.y_max_input)
+        if xmin is not None:
+            valid &= x >= xmin
+        if xmax is not None:
+            valid &= x <= xmax
+        if ymin is not None:
+            valid &= y >= ymin
+        if ymax is not None:
+            valid &= y <= ymax
+        ratios = pd.to_numeric(self.df.loc[valid, ratio_col], errors="coerce")
         ratios = ratios[(ratios > 0) & np.isfinite(ratios)]
         return ratios if len(ratios) else None
 
     def index_value_range(self):
-        ratios = self.index_ratio_values()
+        ratios = self.filtered_ratio_values()
         if ratios is None:
             return None
         return float(ratios.min()), float(ratios.max())
 
-    def on_condition_changed(self):
+    def resolve_condition_intercept(self, cfg):
+        """The working log-space intercept: from the manual override if the user has
+        fixed one, otherwise the median of the current, filter-adjusted data -- "auto"
+        mode, recomputed every redraw so it tracks criteria/filter changes live."""
+        if self.index_manual_value is not None:
+            return cfg["to_b"](self.index_manual_value)
+        ratios = self.filtered_ratio_values()
+        if ratios is not None:
+            return float(cfg["to_b"](float(ratios.median())))
+        return 0.0
+
+    def refresh_index_value_controls(self):
+        """Sync the field/Reset button/validator range/tooltip to the current criterion,
+        filters and auto/manual state. Called on every redraw so it never goes stale."""
         cfg = self.current_condition_config()
         if cfg is None:
-            self.condition_intercept = None
             self.index_value_input.setEnabled(False)
+            self.index_reset_btn.setEnabled(False)
             self.index_value_input.setPlaceholderText("выберите критерий")
             self.index_value_input.setToolTip("")
-            self.index_value_input.clear()
-            self.update_plot()
+            if not self.index_value_input.hasFocus():
+                self.index_value_input.clear()
             return
-        if self.df is not None and len(self.df):
-            idx = self.index_ratio_values()
-            if idx is not None:
-                self.condition_intercept = cfg["to_b"](float(idx.median()))
         rng = self.index_value_range()
         self.index_value_input.setEnabled(rng is not None)
+        self.index_reset_btn.setEnabled(rng is not None and self.index_manual_value is not None)
         if rng is not None:
             lo, hi = rng
             self.index_value_validator.setRange(lo, hi, 6)
+            self.index_value_input.setPlaceholderText("Авто (вычисляется по данным)")
             self.index_value_input.setToolTip(f"Допустимый диапазон: {lo:.4g} – {hi:.4g}")
+        else:
+            self.index_value_input.setPlaceholderText("нет данных")
+            self.index_value_input.setToolTip("")
+        if not self.index_value_input.hasFocus():
+            if self.index_manual_value is not None:
+                self.index_value_input.setText(f"{self.index_manual_value:.6g}")
+            else:
+                self.index_value_input.clear()
+
+    def on_condition_changed(self):
+        self.index_manual_value = None
+        self.update_plot()
+
+    def on_index_reset(self):
+        self.index_manual_value = None
         self.update_plot()
 
     def on_index_value_edited(self):
@@ -389,6 +446,7 @@ class AshbyDiagramWindow(QMainWindow):
             return
         text = self.index_value_input.text().strip().replace(",", ".")
         if not text:
+            self.index_manual_value = None
             self.update_plot()
             return
         try:
@@ -397,13 +455,22 @@ class AshbyDiagramWindow(QMainWindow):
             self.update_plot()
             return
         if value <= 0:
+            QMessageBox.warning(self, "Некорректное значение", "Значение индекса должно быть положительным числом.")
             self.update_plot()
             return
         rng = self.index_value_range()
         if rng is not None:
             lo, hi = rng
-            value = max(lo, min(hi, value))
-        self.condition_intercept = cfg["to_b"](value)
+            if value < lo or value > hi:
+                QMessageBox.warning(
+                    self,
+                    "Значение вне диапазона",
+                    f"Допустимый диапазон для текущего критерия: {lo:.4g} – {hi:.4g}.\n"
+                    "Введённое значение не применено.",
+                )
+                self.update_plot()
+                return
+        self.index_manual_value = value
         self.update_plot()
 
     @staticmethod
@@ -447,9 +514,7 @@ class AshbyDiagramWindow(QMainWindow):
         ly = np.log10(y[mask])
 
         if cfg is not None:
-            if self.condition_intercept is None:
-                ratios = ly - cfg["m"] * lx
-                self.condition_intercept = float(np.nanmedian(ratios))
+            self.condition_intercept = self.resolve_condition_intercept(cfg)
             line_vals = cfg["m"] * lx + self.condition_intercept
             high_side = self.preference_combo.currentIndex() == 0
             if high_side:
@@ -681,11 +746,13 @@ class AshbyDiagramWindow(QMainWindow):
 
         if cfg is not None and self.condition_intercept is not None:
             line_val = cfg["from_b"](self.condition_intercept)
-            line_info = f"Линия {cfg['label']} = {line_val:.4g}"
-            if not self.index_value_input.hasFocus():
-                self.index_value_input.setText(f"{line_val:.6g}")
+            mode_suffix = " (авто)" if self.index_manual_value is None else ""
+            line_info = f"Линия {cfg['label']} = {line_val:.4g}{mode_suffix}"
+            if self.line_artist is not None:
+                self.line_artist.set_label(f"Условие {cfg['label']} = {line_val:.4g}{mode_suffix}")
         else:
             line_info = "Условие пока не выбрано"
+        self.refresh_index_value_controls()
         self.info_label.setText(
             f"Материалов: {len(self.df)}\n"
             f"Подходящих: {len(suitable_df)}\n"
@@ -719,7 +786,13 @@ class AshbyDiagramWindow(QMainWindow):
         cfg = self.current_condition_config()
         if cfg is None:
             return
-        self.condition_intercept = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
+        intercept = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
+        value = cfg["from_b"](intercept)
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            value = max(lo, min(hi, value))
+        self.index_manual_value = value
         self.update_plot()
 
     def on_press(self, event):
@@ -782,12 +855,13 @@ class AshbyDiagramWindow(QMainWindow):
         cfg = self.current_condition_config()
         if cfg is None:
             return
-        intercept = (self.condition_intercept or 0.0) + step
+        baseline = self.condition_intercept if self.condition_intercept is not None else self.resolve_condition_intercept(cfg)
+        intercept = baseline + step
         rng = self.index_value_range()
         if rng is not None:
             lo, hi = rng
             intercept = max(cfg["to_b"](lo), min(cfg["to_b"](hi), intercept))
-        self.condition_intercept = intercept
+        self.index_manual_value = cfg["from_b"](intercept)
         self.update_plot()
 
     def update_material_hover(self, event):
