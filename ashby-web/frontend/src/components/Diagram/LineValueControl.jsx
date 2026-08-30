@@ -37,12 +37,10 @@ export default function LineValueControl({condition, data}) {
 
   const [text, setText] = useState('');
   const [warning, setWarning] = useState('');
-  const [dragValue, setDragValue] = useState(null);
 
   useEffect(() => {
-    if (disabled) { setText(''); setDragValue(null); return; }
+    if (disabled) { setText(''); return; }
     setText(manualActive ? formatValue(currentValue) : '');
-    setDragValue(null);
   }, [condition, manualActive, currentValue, disabled]);
 
   // Dragging the line on the chart moves it live via direct D3/DOM updates (see
@@ -51,16 +49,11 @@ export default function LineValueControl({condition, data}) {
   // field on every drag tick, instead of only once the drag ends and params commit.
   useEffect(() => {
     window.__ashbyLiveIndexValue = window.__ashbyLiveIndexValue || {};
-    window.__ashbyLiveIndexValue[condition] = (value) => {
-      setDragValue(value);
-      setText(formatValue(value));
-    };
+    window.__ashbyLiveIndexValue[condition] = (value) => setText(formatValue(value));
     return () => {
       if (window.__ashbyLiveIndexValue) delete window.__ashbyLiveIndexValue[condition];
     };
   }, [condition]);
-
-  const displayValue = dragValue ?? currentValue;
 
   const resetValue = () => {
     setWarning('');
@@ -113,7 +106,6 @@ export default function LineValueControl({condition, data}) {
           onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
         />
         <button type="button" className="btn-secondary px-2 py-1 text-[10px]" disabled={disabled || !manualActive} onClick={resetValue}>Сброс</button>
-        <span className="whitespace-nowrap text-[rgb(74,63,75)]">{displayValue != null ? `= ${formatValue(displayValue)}` : ''}</span>
       </div>
       {warning && <span className="rounded-xl bg-[rgb(240,217,228)] px-2 py-1 text-[11px] font-bold text-[rgb(180,30,30)] shadow">{warning}</span>}
     </div>
