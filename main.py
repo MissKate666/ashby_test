@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.patches import Polygon as MplPolygon
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QLocale, Qt
+from PyQt5.QtGui import QDoubleValidator
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -34,6 +35,8 @@ from translation import MaterialTranslator
 
 
 class AshbyDiagramWindow(QMainWindow):
+    RATIO_COLUMNS = {1: "E_over_rho", 2: "Strength_over_rho", 3: "SqrtE_over_rho"}
+
     def __init__(self):
         super().__init__()
         self.df = None
@@ -89,6 +92,18 @@ class AshbyDiagramWindow(QMainWindow):
         self.preference_combo.addItems(["Высокое значение", "Низкое значение"])
         self.preference_combo.currentIndexChanged.connect(self.update_plot)
         cond_layout.addRow("Подходит:", self.preference_combo)
+
+        self.index_value_input = QLineEdit()
+        self.index_value_input.setPlaceholderText("выберите критерий")
+        self.index_value_input.setEnabled(False)
+        self.index_value_validator = QDoubleValidator()
+        self.index_value_validator.setNotation(QDoubleValidator.StandardNotation)
+        self.index_value_validator.setLocale(QLocale.c())
+        self.index_value_validator.setDecimals(6)
+        self.index_value_input.setValidator(self.index_value_validator)
+        self.index_value_input.editingFinished.connect(self.on_index_value_edited)
+        cond_layout.addRow("Значение индекса:", self.index_value_input)
+
         cond_group.setLayout(cond_layout)
         panel_layout.addWidget(cond_group)
 
@@ -332,22 +347,63 @@ class AshbyDiagramWindow(QMainWindow):
             return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
         return None
 
+    def index_ratio_values(self):
+        ratio_col = self.RATIO_COLUMNS.get(self.condition_combo.currentIndex())
+        if ratio_col is None or self.df is None or ratio_col not in self.df.columns:
+            return None
+        ratios = pd.to_numeric(self.df[ratio_col], errors="coerce")
+        ratios = ratios[(ratios > 0) & np.isfinite(ratios)]
+        return ratios if len(ratios) else None
+
+    def index_value_range(self):
+        ratios = self.index_ratio_values()
+        if ratios is None:
+            return None
+        return float(ratios.min()), float(ratios.max())
+
     def on_condition_changed(self):
         cfg = self.current_condition_config()
         if cfg is None:
             self.condition_intercept = None
+            self.index_value_input.setEnabled(False)
+            self.index_value_input.setPlaceholderText("выберите критерий")
+            self.index_value_input.setToolTip("")
+            self.index_value_input.clear()
             self.update_plot()
             return
         if self.df is not None and len(self.df):
-            if self.condition_combo.currentIndex() == 1:
-                idx = pd.to_numeric(self.df["E_over_rho"], errors="coerce")
-            elif self.condition_combo.currentIndex() == 2:
-                idx = pd.to_numeric(self.df["Strength_over_rho"], errors="coerce")
-            else:
-                idx = pd.to_numeric(self.df["SqrtE_over_rho"], errors="coerce")
-            idx = idx[(idx > 0) & np.isfinite(idx)]
-            if len(idx):
+            idx = self.index_ratio_values()
+            if idx is not None:
                 self.condition_intercept = cfg["to_b"](float(idx.median()))
+        rng = self.index_value_range()
+        self.index_value_input.setEnabled(rng is not None)
+        if rng is not None:
+            lo, hi = rng
+            self.index_value_validator.setRange(lo, hi, 6)
+            self.index_value_input.setToolTip(f"Допустимый диапазон: {lo:.4g} – {hi:.4g}")
+        self.update_plot()
+
+    def on_index_value_edited(self):
+        cfg = self.current_condition_config()
+        if cfg is None:
+            return
+        text = self.index_value_input.text().strip().replace(",", ".")
+        if not text:
+            self.update_plot()
+            return
+        try:
+            value = float(text)
+        except ValueError:
+            self.update_plot()
+            return
+        if value <= 0:
+            self.update_plot()
+            return
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            value = max(lo, min(hi, value))
+        self.condition_intercept = cfg["to_b"](value)
         self.update_plot()
 
     @staticmethod
@@ -626,6 +682,8 @@ class AshbyDiagramWindow(QMainWindow):
         if cfg is not None and self.condition_intercept is not None:
             line_val = cfg["from_b"](self.condition_intercept)
             line_info = f"Линия {cfg['label']} = {line_val:.4g}"
+            if not self.index_value_input.hasFocus():
+                self.index_value_input.setText(f"{line_val:.6g}")
         else:
             line_info = "Условие пока не выбрано"
         self.info_label.setText(
