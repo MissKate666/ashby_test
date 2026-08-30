@@ -89,11 +89,6 @@ class AshbyDiagramWindow(QMainWindow):
         self.condition_combo.currentIndexChanged.connect(self.on_condition_changed)
         cond_layout.addRow("Критерий:", self.condition_combo)
 
-        self.preference_combo = QComboBox()
-        self.preference_combo.addItems(["Высокое значение", "Низкое значение"])
-        self.preference_combo.currentIndexChanged.connect(self.update_plot)
-        cond_layout.addRow("Подходит:", self.preference_combo)
-
         self.index_value_input = QLineEdit()
         self.index_value_input.setPlaceholderText("выберите критерий")
         self.index_value_input.setEnabled(False)
@@ -114,6 +109,11 @@ class AshbyDiagramWindow(QMainWindow):
         index_row_widget = QWidget()
         index_row_widget.setLayout(index_row)
         cond_layout.addRow("Значение индекса:", index_row_widget)
+
+        self.preference_combo = QComboBox()
+        self.preference_combo.addItems(["Высокое значение", "Низкое значение"])
+        self.preference_combo.currentIndexChanged.connect(self.update_plot)
+        cond_layout.addRow("Подходит:", self.preference_combo)
 
         cond_group.setLayout(cond_layout)
         panel_layout.addWidget(cond_group)
