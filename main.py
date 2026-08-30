@@ -1,5 +1,4 @@
 import sys
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +30,8 @@ from PyQt5.QtWidgets import (
 )
 from shapely.geometry import LineString, MultiPoint, Point, Polygon
 
+from translation import MaterialTranslator
+
 
 class AshbyDiagramWindow(QMainWindow):
     def __init__(self):
@@ -47,12 +48,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.panning = False
         self.pan_start = None
         self.invalid_bounds_notified = False
-        self.translator = self.build_translator()
-        self.translation_cache = {}
-        self.translation_overrides = {
-            "Glasses": "Стекло",
-            "Natural": "Природные",
-        }
+        self.translator = MaterialTranslator()
         self.last_suitable_df = pd.DataFrame()
         self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
         self.default_paths = {
@@ -285,13 +281,10 @@ class AshbyDiagramWindow(QMainWindow):
                 missing = sorted(expected_groups - found_groups)
                 raise ValueError(f"В диаграмме отсутствуют обязательные группы: {missing}")
 
-            if self.translator is None:
-                raise RuntimeError("Не удалось инициализировать библиотеку перевода. Проверьте подключение к интернету и доступ к pip.")
-
-            self.groups_df["group_name"] = self.translate_series_to_russian(self.groups_df["group_name"])
+            self.groups_df["group_name"] = self.translator.translate_series(self.groups_df["group_name"])
             for col in ["group_name", "subgroup_name", "material_name"]:
                 if col in merged.columns:
-                    merged[col] = self.translate_series_to_russian(merged[col])
+                    merged[col] = self.translator.translate_series(merged[col])
 
             self.df = merged.reset_index(drop=True)
             self.info_label.setText(f"Загружено материалов: {len(self.df)}")
@@ -366,97 +359,6 @@ class AshbyDiagramWindow(QMainWindow):
             return float(text)
         except ValueError:
             return None
-
-    def translate_series_to_russian(self, series: pd.Series) -> pd.Series:
-        if self.translator is None:
-            return series
-
-        def translate_value(value):
-            if pd.isna(value):
-                return value
-            text = str(value).strip()
-            if not text:
-                return value
-            if text in self.translation_overrides:
-                return self.translation_overrides[text]
-            if text in self.translation_cache:
-                return self.translation_cache[text]
-            try:
-                translated = self.translator.translate(text)
-                self.translation_cache[text] = translated if translated else text
-                return self.translation_cache[text]
-            except Exception:
-                self.translation_cache[text] = text
-                return text
-
-        return series.map(translate_value)
-
-    def build_translator(self):
-        translator = self.build_deep_translator()
-        if translator is not None:
-            return translator
-        return self.build_googletrans_translator()
-
-    @staticmethod
-    def install_package(package_name):
-        try:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", package_name],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return True
-        except Exception:
-            return False
-
-    def build_deep_translator(self):
-        try:
-            from deep_translator import GoogleTranslator, MyMemoryTranslator
-        except ImportError:
-            if not self.install_package("deep-translator"):
-                return None
-            try:
-                from deep_translator import GoogleTranslator, MyMemoryTranslator
-            except Exception:
-                return None
-
-        backends = [
-            GoogleTranslator(source="auto", target="ru"),
-            MyMemoryTranslator(source="en-US", target="ru-RU"),
-        ]
-        for backend in backends:
-            try:
-                if backend.translate("Steel"):
-                    return backend
-            except Exception:
-                continue
-        return None
-
-    def build_googletrans_translator(self):
-        try:
-            from googletrans import Translator as GoogleTransTranslator
-        except ImportError:
-            if not self.install_package("googletrans==4.0.0-rc1"):
-                return None
-            try:
-                from googletrans import Translator as GoogleTransTranslator
-            except Exception:
-                return None
-
-        class GoogleTransAdapter:
-            def __init__(self):
-                self.translator = GoogleTransTranslator()
-
-            def translate(self, text):
-                return self.translator.translate(text, dest="ru").text
-
-        try:
-            adapter = GoogleTransAdapter()
-            if adapter.translate("Steel"):
-                return adapter
-        except Exception:
-            return None
-        return None
 
     def validate_axis_bounds(self):
         xmin = self.parse_optional_float(self.x_min_input)
