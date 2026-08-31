@@ -135,18 +135,18 @@ body::before {
 }
 
 /* Toggled on: same base look as the other buttons, but with a dark radial
-   glow centered on the icon (65% dark at the center, fading to transparent
-   at the edge) instead of a solid fill or a heavy border -- a pressed-in
-   look rather than just a color swap. */
+   glow rising from the edge toward the center (transparent at the center,
+   80% dark at the edge) instead of a solid fill or a heavy border -- a
+   pressed-in, vignette-style look rather than just a color swap. */
 .sync-toggle-btn--active {
-  background: radial-gradient(circle, rgba(22, 19, 31, 0.65) 0%, rgba(22, 19, 31, 0.15) 60%, transparent 100%), rgba(240, 217, 228, 0.78);
-  color: var(--light-pink);
+  background: radial-gradient(circle, transparent 0%, rgba(22, 19, 31, 0.25) 55%, rgba(22, 19, 31, 0.8) 100%), rgba(240, 217, 228, 0.78);
+  color: var(--black);
   box-shadow: inset 0 2px 4px rgba(22, 19, 31, 0.4);
   transform: translateY(1px);
 }
 
 .sync-toggle-btn--active:hover {
-  background: radial-gradient(circle, rgba(22, 19, 31, 0.75) 0%, rgba(22, 19, 31, 0.2) 60%, transparent 100%), var(--pink);
+  background: radial-gradient(circle, transparent 0%, rgba(22, 19, 31, 0.3) 55%, rgba(22, 19, 31, 0.85) 100%), var(--pink);
 }
 
 /* A classic textbook fraction: numerator stacked above a horizontal rule above
