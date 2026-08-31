@@ -22,7 +22,10 @@ def suitable_frame(request: AnalyzeRequest, data):
 def export_csv(condition: str = "stiffness", preference: str = "high", x_min: float | None = None, x_max: float | None = None, y_min: float | None = None, y_max: float | None = None, intercept: float | None = None, data=Depends(dataset)):
     req = AnalyzeRequest(condition=condition, preference=preference, x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max, intercept=intercept)
     buffer = StringIO(); suitable_frame(req, data).to_csv(buffer, index=False)
-    return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=ashby_materials.csv"})
+    # Prefix a UTF-8 BOM: without it, Excel guesses the file's encoding from the
+    # system locale instead of UTF-8, garbling the Cyrillic group/subgroup names.
+    content = "﻿" + buffer.getvalue()
+    return StreamingResponse(iter([content]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=ashby_materials.csv"})
 
 
 @router.get("/excel")

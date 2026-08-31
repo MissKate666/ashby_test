@@ -1,34 +1,6 @@
 import React, {useMemo, useState} from 'react';
 import {useApp} from '../../context/AppContext';
-
-// Every criterion is a ratio of some numerator (with an optional exponent) over
-// density ρ. `numerator` holds the tokens shown above the fraction bar; the
-// denominator is always ρ, rendered by <Formula> below the bar.
-const conditionOptions=[
-  ['stiffness',['E'],'Жёсткость тяг'],
-  ['strength',['σ'],'Прочность тяг'],
-  ['bending',['√E'],'Жёсткость балок'],
-  ['plate_stiffness',['E',{sup:'1/3'}],'Жёсткость пластин'],
-  ['beam_strength',['σ',{sup:'2/3'}],'Прочность балок'],
-  ['column_stiffness',['E',{sup:'1/2'}],'Жёсткость колонн'],
-];
-
-const numeratorText = numerator => numerator.map(t => typeof t === 'string' ? t : `^(${t.sup})`).join('');
-// Plain-text form of a formula, e.g. "E^(1/3)/ρ", used for search matching.
-const formulaText = numerator => `${numeratorText(numerator)}/ρ`;
-
-function Formula({numerator}) {
-  return (
-    <span className="inline-fraction">
-      <span className="inline-fraction__num">
-        {numerator.map((t, i) => typeof t === 'string'
-          ? <React.Fragment key={i}>{t}</React.Fragment>
-          : <sup key={i}>{t.sup}</sup>)}
-      </span>
-      <span className="inline-fraction__den">ρ</span>
-    </span>
-  );
-}
+import {CONDITION_OPTIONS as conditionOptions, formulaText, Formula} from '../../lib/conditionFormulas';
 
 export default function ConditionSelector() {
   const {params, setParams} = useApp();
