@@ -34,31 +34,11 @@ export default function ConditionSelector() {
 
   const set = (k, v) => setParams(p => ({...p, [k]: v, intercept: k === 'preference' ? null : p.intercept, intercepts: k === 'preference' ? {} : p.intercepts}));
 
-  const toggleSync = () => setParams(p => {
-    const syncLines = !p.syncLines;
-    if (syncLines) return {...p, syncLines};
-    const current = p.conditions?.length ? p.conditions : [p.condition].filter(Boolean);
-    const intercepts = Object.fromEntries(current.map(condition => [condition, p.intercepts?.[condition] ?? p.intercept]));
-    return {...p, syncLines, intercept: null, intercepts};
-  });
-
   return (
     <div className="grid gap-3">
       <div>
         <p className="panel-label mb-2">Критерии эффективности</p>
-        <div className="mb-2 flex items-center gap-2">
-          <input className="panel-input flex-1" placeholder="Поиск критерия" value={query} onChange={e => setQuery(e.target.value)} />
-          <button
-            type="button"
-            className={`btn-secondary shrink-0 px-3 ${params.syncLines ? 'bg-[rgb(74,63,75)] text-[rgb(240,217,228)]' : ''}`}
-            title="Двигать линии синхронно на всех графиках"
-            aria-label="Двигать линии синхронно на всех графиках"
-            aria-pressed={params.syncLines}
-            onClick={toggleSync}
-          >
-            ≡
-          </button>
-        </div>
+        <input className="panel-input mb-2" placeholder="Поиск критерия" value={query} onChange={e => setQuery(e.target.value)} />
         <div className="max-h-52 overflow-y-auto pr-1">
           <div className="grid gap-2">
             {visibleOptions.map(([value, label]) => (

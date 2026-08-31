@@ -1,8 +1,10 @@
 import React, {useEffect, useRef, useState} from 'react';
+import {useApp} from '../../context/AppContext';
 import LineValueControl from './LineValueControl';
 import AxisLimits from '../Controls/AxisLimits';
 
 export default function ChartSettingsMenu({condition, data}) {
+  const {params, toggleSyncLines} = useApp();
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
 
@@ -37,7 +39,19 @@ export default function ChartSettingsMenu({condition, data}) {
       </button>
       {open && (
         <div className="absolute left-0 top-full z-40 mt-2 w-72 rounded-[1.25rem] border border-[rgba(74,63,75,0.16)] bg-[rgb(240,217,228)] p-4 shadow-[0_18px_42px_rgba(74,63,75,0.22)]">
-          <p className="mb-2 text-xs font-black uppercase tracking-[0.2em] text-[rgb(74,63,75)]">Индекс эффективности</p>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-[rgb(74,63,75)]">Индекс эффективности</p>
+            <button
+              type="button"
+              className={`btn-secondary px-2 py-1 text-xs leading-none ${params.syncLines ? 'bg-[rgb(74,63,75)] text-[rgb(240,217,228)]' : ''}`}
+              title="Двигать линии синхронно на всех графиках"
+              aria-label="Двигать линии синхронно на всех графиках"
+              aria-pressed={params.syncLines}
+              onClick={toggleSyncLines}
+            >
+              ≡
+            </button>
+          </div>
           <LineValueControl condition={condition} data={data} />
           <p className="mb-2 mt-4 text-xs font-black uppercase tracking-[0.2em] text-[rgb(74,63,75)]">Границы осей</p>
           <AxisLimits condition={condition} />

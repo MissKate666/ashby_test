@@ -37,7 +37,17 @@ export function AppProvider({children}){
     if (next.has(name)) next.delete(name); else next.add(name);
     return {...prev, [condition]: next};
   });
-  const value=useMemo(()=>({params,setParams,hiddenGroupsByCondition,setHiddenGroupsFor,toggleGroup,axisBoundsByCondition,setAxisBoundsFor}),[params,hiddenGroupsByCondition,axisBoundsByCondition]);
+  // Shared here (rather than inline where the button lives) since the sync toggle
+  // is a single cross-chart setting: every chart's settings menu renders the same
+  // "≡" button reading/writing the same params.syncLines, not a per-chart control.
+  const toggleSyncLines = () => setParams(p => {
+    const syncLines = !p.syncLines;
+    if (syncLines) return {...p, syncLines};
+    const current = p.conditions?.length ? p.conditions : [p.condition].filter(Boolean);
+    const intercepts = Object.fromEntries(current.map(condition => [condition, p.intercepts?.[condition] ?? p.intercept]));
+    return {...p, syncLines, intercept: null, intercepts};
+  });
+  const value=useMemo(()=>({params,setParams,hiddenGroupsByCondition,setHiddenGroupsFor,toggleGroup,axisBoundsByCondition,setAxisBoundsFor,toggleSyncLines}),[params,hiddenGroupsByCondition,axisBoundsByCondition]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
