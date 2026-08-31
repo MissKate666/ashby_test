@@ -2,9 +2,11 @@ import React from 'react';
 import {useApp} from '../../context/AppContext';
 
 const groupColor = i => `hsl(${(318 + i * 47) % 360} 28% 56%)`;
+const EMPTY_SET = new Set();
 
-export default function GroupLegend({groups = []}) {
-  const {hiddenGroups, setHiddenGroups, toggleGroup} = useApp();
+export default function GroupLegend({condition, groups = []}) {
+  const {hiddenGroupsByCondition, setHiddenGroupsFor, toggleGroup} = useApp();
+  const hiddenGroups = hiddenGroupsByCondition[condition] ?? EMPTY_SET;
   const uniq = groups.filter(g => g.kind === 'group');
 
   return (
@@ -14,14 +16,14 @@ export default function GroupLegend({groups = []}) {
           <button
             type="button"
             className="rounded-lg bg-[rgba(74,63,75,0.1)] px-2 py-1 text-[10px] font-black uppercase tracking-wide text-[rgb(74,63,75)] transition hover:bg-[rgba(74,63,75,0.2)]"
-            onClick={() => setHiddenGroups(new Set())}
+            onClick={() => setHiddenGroupsFor(condition, new Set())}
           >
             Показать все
           </button>
           <button
             type="button"
             className="rounded-lg bg-[rgba(74,63,75,0.1)] px-2 py-1 text-[10px] font-black uppercase tracking-wide text-[rgb(74,63,75)] transition hover:bg-[rgba(74,63,75,0.2)]"
-            onClick={() => setHiddenGroups(new Set(uniq.map(g => g.name)))}
+            onClick={() => setHiddenGroupsFor(condition, new Set(uniq.map(g => g.name)))}
           >
             Скрыть все
           </button>
@@ -36,7 +38,7 @@ export default function GroupLegend({groups = []}) {
             title={hidden ? `Показать группу «${g.name}»` : `Скрыть группу «${g.name}»`}
             className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg py-1 text-left transition hover:bg-[rgba(74,63,75,0.08)]"
             style={{opacity: hidden ? 0.4 : 1}}
-            onClick={() => toggleGroup(g.name)}
+            onClick={() => toggleGroup(condition, g.name)}
           >
             <span
               className="h-3 w-3 shrink-0 rounded-full border border-[rgba(22,19,31,0.25)]"
