@@ -1,4 +1,5 @@
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -7,8 +8,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.patches import Polygon as MplPolygon
-from PyQt5.QtCore import QLocale, Qt, QTimer
-from PyQt5.QtGui import QDoubleValidator
+from PyQt5.QtCore import QLocale, QPointF, QSize, Qt, QTimer
+from PyQt5.QtGui import QColor, QDoubleValidator, QIcon, QPainter, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -32,6 +33,21 @@ from PyQt5.QtWidgets import (
 from shapely.geometry import LineString, MultiPoint, Point, Polygon
 
 from translation import MaterialTranslator
+
+
+@dataclass(frozen=True)
+class AshbyState:
+    """A snapshot of everything Undo/Redo can restore: the selected criterion and
+    preference, the condition line's position (a manual index value, or None for
+    auto/median), and the four axis-boundary text fields."""
+
+    condition_index: int
+    preference_index: int
+    index_manual_value: float | None
+    x_min: str
+    x_max: str
+    y_min: str
+    y_max: str
 
 
 class AshbyDiagramWindow(QMainWindow):
@@ -64,6 +80,11 @@ class AshbyDiagramWindow(QMainWindow):
         self._drag_timer.timeout.connect(self._process_drag_frame)
         self.translator = MaterialTranslator()
         self.last_suitable_df = pd.DataFrame()
+        self.current_state = None
+        self.undo_stack = []
+        self.redo_stack = []
+        self.MAX_HISTORY = 30
+        self._restoring_state = False
         self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
@@ -195,6 +216,27 @@ class AshbyDiagramWindow(QMainWindow):
         self.counter_label = QLabel("Подходящих материалов: 0")
         self.counter_label.setStyleSheet("font-weight: 700; font-size: 22px;")
         plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
+
+        history_row = QHBoxLayout()
+        history_row.addStretch(1)
+        self.undo_btn = QPushButton(" Назад")
+        self.undo_btn.setIcon(self._make_arrow_icon("left"))
+        self.undo_btn.setIconSize(QSize(16, 16))
+        self.undo_btn.setToolTip("Отменить последнее действие")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self.undo_action)
+        self.redo_btn = QPushButton("Вперёд ")
+        self.redo_btn.setIcon(self._make_arrow_icon("right"))
+        self.redo_btn.setIconSize(QSize(16, 16))
+        self.redo_btn.setLayoutDirection(Qt.RightToLeft)
+        self.redo_btn.setToolTip("Повторить отменённое действие")
+        self.redo_btn.setEnabled(False)
+        self.redo_btn.clicked.connect(self.redo_action)
+        history_row.addWidget(self.undo_btn)
+        history_row.addWidget(self.redo_btn)
+        history_row.addStretch(1)
+        plot_layout.addLayout(history_row)
+
         self.figure = plt.figure(facecolor="#F8FAFC")
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setStyleSheet("background: #F8FAFC; border-radius: 12px;")
@@ -288,6 +330,26 @@ class AshbyDiagramWindow(QMainWindow):
             }
             """
         )
+
+    @staticmethod
+    def _make_arrow_icon(direction, color="#334155", size=28):
+        """Draws a small filled chevron (left/right) into a QIcon at runtime, instead
+        of relying on plain text arrow glyphs (e.g. "<"/">"), for a crisper, resolution
+        -independent icon with no external asset files."""
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(color))
+        w, h = size, size
+        if direction == "left":
+            points = [QPointF(w * 0.68, h * 0.14), QPointF(w * 0.28, h * 0.5), QPointF(w * 0.68, h * 0.86)]
+        else:
+            points = [QPointF(w * 0.32, h * 0.14), QPointF(w * 0.72, h * 0.5), QPointF(w * 0.32, h * 0.86)]
+        painter.drawPolygon(QPolygonF(points))
+        painter.end()
+        return QIcon(pixmap)
 
     @staticmethod
     def lighten_color(hex_color, factor=0.65):
@@ -647,6 +709,75 @@ class AshbyDiagramWindow(QMainWindow):
         coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
         return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor="white", alpha=0.85, linewidth=0.5, zorder=4)
 
+    def _snapshot_state(self):
+        return AshbyState(
+            condition_index=self.condition_combo.currentIndex(),
+            preference_index=self.preference_combo.currentIndex(),
+            index_manual_value=self.index_manual_value,
+            x_min=self.x_min_input.text(),
+            x_max=self.x_max_input.text(),
+            y_min=self.y_min_input.text(),
+            y_max=self.y_max_input.text(),
+        )
+
+    def _apply_state(self, state):
+        self._restoring_state = True
+        try:
+            self.condition_combo.setCurrentIndex(state.condition_index)
+            self.preference_combo.setCurrentIndex(state.preference_index)
+            self.x_min_input.setText(state.x_min)
+            self.x_max_input.setText(state.x_max)
+            self.y_min_input.setText(state.y_min)
+            self.y_max_input.setText(state.y_max)
+            self.index_manual_value = state.index_manual_value
+            self.update_plot()
+        finally:
+            self._restoring_state = False
+
+    def _maybe_record_state(self):
+        """Called at the end of every successful update_plot() -- the common funnel for
+        criterion changes, preference changes, axis-boundary edits, index input/reset and
+        line drags. Pushes the *previous* current state onto the undo stack whenever the
+        state actually changed, and clears the redo stack (a new change invalidates any
+        previously-undone "future"). Skipped while restoring a state ourselves so
+        undo/redo clicks don't record themselves as new history."""
+        if self._restoring_state:
+            return
+        new_state = self._snapshot_state()
+        if self.current_state is not None and new_state != self.current_state:
+            self.undo_stack.append(self.current_state)
+            if len(self.undo_stack) > self.MAX_HISTORY:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+        self.current_state = new_state
+        self._update_undo_redo_buttons()
+
+    def _update_undo_redo_buttons(self):
+        self.undo_btn.setEnabled(bool(self.undo_stack))
+        self.redo_btn.setEnabled(bool(self.redo_stack))
+
+    def undo_action(self):
+        if not self.undo_stack or self.current_state is None:
+            return
+        prev_state = self.undo_stack.pop()
+        self.redo_stack.append(self.current_state)
+        if len(self.redo_stack) > self.MAX_HISTORY:
+            self.redo_stack.pop(0)
+        self.current_state = prev_state
+        self._apply_state(prev_state)
+        self._update_undo_redo_buttons()
+
+    def redo_action(self):
+        if not self.redo_stack or self.current_state is None:
+            return
+        next_state = self.redo_stack.pop()
+        self.undo_stack.append(self.current_state)
+        if len(self.undo_stack) > self.MAX_HISTORY:
+            self.undo_stack.pop(0)
+        self.current_state = next_state
+        self._apply_state(next_state)
+        self._update_undo_redo_buttons()
+
     def update_plot(self):
         if self.df is None:
             return
@@ -808,6 +939,7 @@ class AshbyDiagramWindow(QMainWindow):
         self._drag_x_col = x_col
         self._drag_y_col = y_col
         self.canvas.draw_idle()
+        self._maybe_record_state()
 
     def _apply_line_value(self, y_data, x_reference):
         """Pure calc: resolve a dragged y position into the (clamped) index value and
