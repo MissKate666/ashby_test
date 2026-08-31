@@ -9,14 +9,20 @@ export function AppProvider({children}){
     conditions:[defaultCondition],
     condition:defaultCondition,
     preference:'high',
-    x_min:'',
-    x_max:'',
-    y_min:'',
-    y_max:'',
     intercepts:{},
     intercept:null,
     syncLines:true,
   });
+  // Axis boundaries (X/Y min/max), keyed per chart (by condition) -- each chart
+  // has its own independent bounds instead of one set shared by every diagram.
+  // Unlike hiddenGroups, these DO need to reach the backend (they change which
+  // materials analyze() considers), so useDiagramData's bodyFor merges the
+  // current chart's entry into its request instead of reading a global field.
+  const [axisBoundsByCondition,setAxisBoundsByCondition]=useState({});
+  const setAxisBoundsFor = (condition, patch) => setAxisBoundsByCondition(prev => ({
+    ...prev,
+    [condition]: {...(prev[condition] || {}), ...patch},
+  }));
   // Legend group visibility, keyed per chart (by condition). Kept out of `params`
   // on purpose: params drives the analyze() request to the backend (see
   // useDiagramData's bodyFor), and hiding a group is a pure client-side display
@@ -31,7 +37,7 @@ export function AppProvider({children}){
     if (next.has(name)) next.delete(name); else next.add(name);
     return {...prev, [condition]: next};
   });
-  const value=useMemo(()=>({params,setParams,hiddenGroupsByCondition,setHiddenGroupsFor,toggleGroup}),[params,hiddenGroupsByCondition]);
+  const value=useMemo(()=>({params,setParams,hiddenGroupsByCondition,setHiddenGroupsFor,toggleGroup,axisBoundsByCondition,setAxisBoundsFor}),[params,hiddenGroupsByCondition,axisBoundsByCondition]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 

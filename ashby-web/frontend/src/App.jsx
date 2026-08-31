@@ -1,6 +1,6 @@
 import React from 'react';import {createRoot} from 'react-dom/client';import './index.css';import {AppProvider,useApp} from './context/AppContext';import {useDiagramData} from './hooks/useDiagramData';import Layout from './components/Layout/Layout';import AshbyDiagram from './components/Diagram/AshbyDiagram';
 const EMPTY_SET=new Set();
-function Page(){const {params,hiddenGroupsByCondition}=useApp();const state=useDiagramData(params);const items=state.items.length?state.items:[{condition:params.condition,label:'Диаграмма',data:state.data}];
+function Page(){const {params,hiddenGroupsByCondition,axisBoundsByCondition}=useApp();const state=useDiagramData(params,axisBoundsByCondition);const items=state.items.length?state.items:[{condition:params.condition,label:'Диаграмма',data:state.data}];
   // suitable_count/total_count come from the backend over ALL groups; hiding a
   // group is purely a client-side display filter (see AppContext.jsx), so those
   // points must be subtracted here rather than by re-querying the backend. The

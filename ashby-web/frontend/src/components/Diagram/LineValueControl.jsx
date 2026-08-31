@@ -13,15 +13,15 @@ function formatValue(value) {
 // backend's own formula (see diagram.py's analyze()) -- not read from a fixed
 // per-criterion CSV column, which doesn't exist for every criterion and (checked
 // against the dataset) doesn't reliably match this formula for the ones that do.
-function computeRange(data, params) {
+function computeRange(data, bounds) {
   const slope = data?.condition_line?.slope;
   if (!slope || !data?.points?.length) return null;
   const values = data.points
     .filter(p => {
-      if (isSet(params.x_min) && p.x < Number(params.x_min)) return false;
-      if (isSet(params.x_max) && p.x > Number(params.x_max)) return false;
-      if (isSet(params.y_min) && p.y < Number(params.y_min)) return false;
-      if (isSet(params.y_max) && p.y > Number(params.y_max)) return false;
+      if (isSet(bounds.x_min) && p.x < Number(bounds.x_min)) return false;
+      if (isSet(bounds.x_max) && p.x > Number(bounds.x_max)) return false;
+      if (isSet(bounds.y_min) && p.y < Number(bounds.y_min)) return false;
+      if (isSet(bounds.y_max) && p.y > Number(bounds.y_max)) return false;
       return true;
     })
     .map(p => 10 ** ((Math.log10(p.y) - slope * Math.log10(p.x)) / slope))
@@ -30,12 +30,14 @@ function computeRange(data, params) {
   return [Math.min(...values), Math.max(...values)];
 }
 
+const EMPTY_BOUNDS = {};
+
 export default function LineValueControl({condition, data}) {
-  const {params, setParams} = useApp();
+  const {params, setParams, axisBoundsByCondition} = useApp();
   const line = data?.condition_line;
   const currentValue = line && line.slope ? 10 ** (line.intercept / line.slope) : null;
   const manualActive = isSet(params.intercepts?.[condition]) || (params.syncLines && isSet(params.intercept));
-  const range = computeRange(data, params);
+  const range = computeRange(data, axisBoundsByCondition[condition] ?? EMPTY_BOUNDS);
   const disabled = !line || !range;
 
   const [text, setText] = useState('');
@@ -95,11 +97,10 @@ export default function LineValueControl({condition, data}) {
     : `Допустимый диапазон: ${formatValue(range[0])} — ${formatValue(range[1])}`;
 
   return (
-    <div className="pointer-events-auto flex flex-col gap-1">
-      <div className="flex items-center gap-2 rounded-full bg-[rgba(240,217,228,0.86)] px-3 py-2 text-xs font-black text-[rgb(22,19,31)] shadow">
-        <span className="whitespace-nowrap">Индекс:</span>
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2 text-xs font-black text-[rgb(22,19,31)]">
         <input
-          className="w-24 touch-target rounded-xl border border-[rgba(74,63,75,0.24)] bg-white/70 px-2 py-1 text-xs font-bold text-[rgb(22,19,31)] shadow-sm transition focus:outline-none focus:ring-2 focus:ring-[rgb(74,63,75)] disabled:opacity-50"
+          className="w-full touch-target rounded-xl border border-[rgba(74,63,75,0.24)] bg-white/70 px-2 py-1 text-xs font-bold text-[rgb(22,19,31)] shadow-sm transition focus:outline-none focus:ring-2 focus:ring-[rgb(74,63,75)] disabled:opacity-50"
           placeholder={disabled ? 'нет данных' : 'Авто'}
           title={tooltip}
           value={text}
@@ -110,7 +111,7 @@ export default function LineValueControl({condition, data}) {
         />
         <button type="button" className="btn-secondary px-2 py-1 text-[10px]" disabled={disabled || !manualActive} onClick={resetValue}>Сброс</button>
       </div>
-      {warning && <span className="rounded-xl bg-[rgb(240,217,228)] px-2 py-1 text-[11px] font-bold text-[rgb(180,30,30)] shadow">{warning}</span>}
+      {warning && <span className="rounded-xl bg-[rgba(74,63,75,0.1)] px-2 py-1 text-[11px] font-bold text-[rgb(180,30,30)]">{warning}</span>}
     </div>
   );
 }
