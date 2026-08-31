@@ -35,7 +35,6 @@ from translation import MaterialTranslator
 
 
 class AshbyDiagramWindow(QMainWindow):
-    RATIO_COLUMNS = {1: "E_over_rho", 2: "Strength_over_rho", 3: "SqrtE_over_rho"}
 
     def __init__(self):
         super().__init__()
@@ -96,7 +95,15 @@ class AshbyDiagramWindow(QMainWindow):
         cond_group = QGroupBox("Условия")
         cond_layout = QFormLayout()
         self.condition_combo = QComboBox()
-        self.condition_combo.addItems(["Не выбрано", "Лёгкость (E/ρ)", "Прочность (σ/ρ)", "Изгиб (√E/ρ)"])
+        self.condition_combo.addItems([
+            "Не выбрано",
+            "E/ρ — Жёсткость тяг",
+            "σ/ρ — Прочность тяг",
+            "√E/ρ — Жёсткость балок",
+            "E^(1/3)/ρ — Жёсткость пластин",
+            "σ^(2/3)/ρ — Прочность балок",
+            "E^(1/2)/ρ — Жёсткость колонн",
+        ])
         self.condition_combo.currentIndexChanged.connect(self.on_condition_changed)
         cond_layout.addRow("Критерий:", self.condition_combo)
 
@@ -368,19 +375,30 @@ class AshbyDiagramWindow(QMainWindow):
             return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
         if idx == 3:
             return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
+        if idx == 4:
+            return {"y_col": "Youngs_Modulus_GPa", "m": 3.0, "label": "E^(1/3)/ρ", "to_b": lambda v: 3 * np.log10(v), "from_b": lambda b: 10 ** (b / 3)}
+        if idx == 5:
+            return {"y_col": "Strength_MPa", "m": 1.5, "label": "σ^(2/3)/ρ", "to_b": lambda v: 1.5 * np.log10(v), "from_b": lambda b: 10 ** (b / 1.5)}
+        if idx == 6:
+            # Same merit index (and slope) as √E/ρ above -- E^(1/2)/ρ is the standard
+            # Ashby merit index for both light stiff beams in bending and light stiff
+            # columns in buckling, so the two entries share m/to_b/from_b by design.
+            return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "E^(1/2)/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
         return None
 
     def filtered_ratio_values(self):
-        """Ratio-column values (E/rho, sigma/rho or sqrtE/rho, matching the current
-        criterion) for materials that satisfy the current axis-range filters, so both the
-        valid input range and the "auto" median stay in sync with those filters."""
-        ratio_col = self.RATIO_COLUMNS.get(self.condition_combo.currentIndex())
-        if ratio_col is None or self.df is None or ratio_col not in self.df.columns:
+        """Index values (E/rho, sigma/rho, E^(1/3)/rho, ...) for the current criterion,
+        computed directly from density and the criterion's y-column via its own
+        log-log formula -- not read from precomputed CSV columns, which don't exist
+        for every criterion and (checked against the dataset) don't reliably agree
+        with the actual line formula anyway. Restricted to materials that satisfy the
+        current axis-range filters, so both the valid input range and the "auto"
+        median stay in sync with those filters and with the line's own equation."""
+        cfg = self.current_condition_config()
+        if cfg is None or self.df is None:
             return None
         x = pd.to_numeric(self.df["Density_kg_m3"], errors="coerce")
-        cfg = self.current_condition_config()
-        y_col = cfg["y_col"] if cfg is not None else "Youngs_Modulus_GPa"
-        y = pd.to_numeric(self.df[y_col], errors="coerce")
+        y = pd.to_numeric(self.df[cfg["y_col"]], errors="coerce")
         valid = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
         xmin = self.parse_optional_float(self.x_min_input)
         xmax = self.parse_optional_float(self.x_max_input)
@@ -394,8 +412,12 @@ class AshbyDiagramWindow(QMainWindow):
             valid &= y >= ymin
         if ymax is not None:
             valid &= y <= ymax
-        ratios = pd.to_numeric(self.df.loc[valid, ratio_col], errors="coerce")
-        ratios = ratios[(ratios > 0) & np.isfinite(ratios)]
+        if not valid.any():
+            return None
+        lx = np.log10(x[valid])
+        ly = np.log10(y[valid])
+        ratios = cfg["from_b"](ly - cfg["m"] * lx)
+        ratios = ratios[np.isfinite(ratios) & (ratios > 0)]
         return ratios if len(ratios) else None
 
     def index_value_range(self):
