@@ -2,13 +2,22 @@ import React, {useMemo, useState} from 'react';
 import {useApp} from '../../context/AppContext';
 
 const conditionOptions=[
-  ['stiffness','E/ρ — Жёсткость тяг'],
-  ['strength','σ/ρ — Прочность тяг'],
-  ['bending','√E/ρ — Жёсткость балок'],
-  ['plate_stiffness','E^(1/3)/ρ — Жёсткость пластин'],
-  ['beam_strength','σ^(2/3)/ρ — Прочность балок'],
-  ['column_stiffness','E^(1/2)/ρ — Жёсткость колонн'],
+  ['stiffness',['E','/ρ'],'Жёсткость тяг'],
+  ['strength',['σ','/ρ'],'Прочность тяг'],
+  ['bending',['√E','/ρ'],'Жёсткость балок'],
+  ['plate_stiffness',['E',{sup:'1/3'},'/ρ'],'Жёсткость пластин'],
+  ['beam_strength',['σ',{sup:'2/3'},'/ρ'],'Прочность балок'],
+  ['column_stiffness',['E',{sup:'1/2'},'/ρ'],'Жёсткость колонн'],
 ];
+
+// Plain-text form of a formula, e.g. "E^(1/3)/ρ", used for search matching.
+const formulaText = tokens => tokens.map(t => typeof t === 'string' ? t : `^(${t.sup})`).join('');
+
+function Formula({tokens}) {
+  return tokens.map((t, i) => typeof t === 'string'
+    ? <React.Fragment key={i}>{t}</React.Fragment>
+    : <sup key={i}>{t.sup}</sup>);
+}
 
 export default function ConditionSelector() {
   const {params, setParams} = useApp();
@@ -17,10 +26,10 @@ export default function ConditionSelector() {
   const normalizedQuery = query.trim().toLocaleLowerCase('ru');
   const visibleOptions = useMemo(
     () => conditionOptions
-      .filter(([, label]) => label.toLocaleLowerCase('ru').includes(normalizedQuery))
-      .sort(([av, al], [bv, bl]) => {
+      .filter(([, formula, description]) => `${formulaText(formula)} — ${description}`.toLocaleLowerCase('ru').includes(normalizedQuery))
+      .sort(([av,,ad], [bv,,bd]) => {
         const selectedDelta = Number(selected.includes(bv)) - Number(selected.includes(av));
-        return selectedDelta || al.localeCompare(bl, 'ru');
+        return selectedDelta || ad.localeCompare(bd, 'ru');
       }),
     [normalizedQuery, selected]
   );
@@ -41,10 +50,11 @@ export default function ConditionSelector() {
         <input className="panel-input mb-2" placeholder="Поиск критерия" value={query} onChange={e => setQuery(e.target.value)} />
         <div className="max-h-52 overflow-y-auto pr-1">
           <div className="grid gap-2">
-            {visibleOptions.map(([value, label]) => (
+            {visibleOptions.map(([value, formula, description]) => (
               <label key={value} className="flex items-center gap-2 rounded-xl bg-[rgba(240,217,228,0.5)] px-3 py-2 text-sm font-bold text-[rgb(22,19,31)]">
                 <input type="checkbox" checked={selected.includes(value)} onChange={() => toggle(value)} />
-                <span>{label}</span>
+                <span className="whitespace-nowrap text-base"><Formula tokens={formula} /></span>
+                <span className="text-[rgb(74,63,75)]">— {description}</span>
               </label>
             ))}
             {!visibleOptions.length && (

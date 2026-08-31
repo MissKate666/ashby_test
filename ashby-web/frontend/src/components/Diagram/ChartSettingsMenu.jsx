@@ -43,7 +43,7 @@ export default function ChartSettingsMenu({condition, data}) {
             <p className="text-xs font-black uppercase tracking-[0.2em] text-[rgb(74,63,75)]">Индекс эффективности</p>
             <button
               type="button"
-              className={`btn-secondary px-2 py-1 text-xs leading-none ${params.syncLines ? 'bg-[rgb(74,63,75)] text-[rgb(240,217,228)]' : ''}`}
+              className={`sync-toggle-btn ${params.syncLines ? 'sync-toggle-btn--active' : ''}`}
               title="Двигать линии синхронно на всех графиках"
               aria-label="Двигать линии синхронно на всех графиках"
               aria-pressed={params.syncLines}

@@ -107,3 +107,32 @@ body::before {
 }
 
 .btn-secondary:hover { transform: translateY(-1px); background: var(--pink); }
+
+.sync-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 9999px;
+  border: 1px solid rgba(74, 63, 75, 0.24);
+  background: rgba(240, 217, 228, 0.78);
+  color: rgb(74, 63, 75);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.sync-toggle-btn:hover { background: var(--pink); transform: translateY(-1px); }
+
+.sync-toggle-btn--active {
+  background: rgb(74, 63, 75);
+  color: rgb(240, 217, 228);
+  border-color: rgb(40, 34, 41);
+}
+
+.sync-toggle-btn--active:hover { background: rgb(50, 42, 50); }
