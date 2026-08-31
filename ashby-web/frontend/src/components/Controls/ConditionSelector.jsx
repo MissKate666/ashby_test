@@ -1,22 +1,33 @@
 import React, {useMemo, useState} from 'react';
 import {useApp} from '../../context/AppContext';
 
+// Every criterion is a ratio of some numerator (with an optional exponent) over
+// density ρ. `numerator` holds the tokens shown above the fraction bar; the
+// denominator is always ρ, rendered by <Formula> below the bar.
 const conditionOptions=[
-  ['stiffness',['E','/ρ'],'Жёсткость тяг'],
-  ['strength',['σ','/ρ'],'Прочность тяг'],
-  ['bending',['√E','/ρ'],'Жёсткость балок'],
-  ['plate_stiffness',['E',{sup:'1/3'},'/ρ'],'Жёсткость пластин'],
-  ['beam_strength',['σ',{sup:'2/3'},'/ρ'],'Прочность балок'],
-  ['column_stiffness',['E',{sup:'1/2'},'/ρ'],'Жёсткость колонн'],
+  ['stiffness',['E'],'Жёсткость тяг'],
+  ['strength',['σ'],'Прочность тяг'],
+  ['bending',['√E'],'Жёсткость балок'],
+  ['plate_stiffness',['E',{sup:'1/3'}],'Жёсткость пластин'],
+  ['beam_strength',['σ',{sup:'2/3'}],'Прочность балок'],
+  ['column_stiffness',['E',{sup:'1/2'}],'Жёсткость колонн'],
 ];
 
+const numeratorText = numerator => numerator.map(t => typeof t === 'string' ? t : `^(${t.sup})`).join('');
 // Plain-text form of a formula, e.g. "E^(1/3)/ρ", used for search matching.
-const formulaText = tokens => tokens.map(t => typeof t === 'string' ? t : `^(${t.sup})`).join('');
+const formulaText = numerator => `${numeratorText(numerator)}/ρ`;
 
-function Formula({tokens}) {
-  return tokens.map((t, i) => typeof t === 'string'
-    ? <React.Fragment key={i}>{t}</React.Fragment>
-    : <sup key={i}>{t.sup}</sup>);
+function Formula({numerator}) {
+  return (
+    <span className="inline-fraction">
+      <span className="inline-fraction__num">
+        {numerator.map((t, i) => typeof t === 'string'
+          ? <React.Fragment key={i}>{t}</React.Fragment>
+          : <sup key={i}>{t.sup}</sup>)}
+      </span>
+      <span className="inline-fraction__den">ρ</span>
+    </span>
+  );
 }
 
 export default function ConditionSelector() {
@@ -26,7 +37,7 @@ export default function ConditionSelector() {
   const normalizedQuery = query.trim().toLocaleLowerCase('ru');
   const visibleOptions = useMemo(
     () => conditionOptions
-      .filter(([, formula, description]) => `${formulaText(formula)} — ${description}`.toLocaleLowerCase('ru').includes(normalizedQuery))
+      .filter(([, numerator, description]) => `${formulaText(numerator)} — ${description}`.toLocaleLowerCase('ru').includes(normalizedQuery))
       .sort(([av,,ad], [bv,,bd]) => {
         const selectedDelta = Number(selected.includes(bv)) - Number(selected.includes(av));
         return selectedDelta || ad.localeCompare(bd, 'ru');
@@ -50,10 +61,10 @@ export default function ConditionSelector() {
         <input className="panel-input mb-2" placeholder="Поиск критерия" value={query} onChange={e => setQuery(e.target.value)} />
         <div className="max-h-52 overflow-y-auto pr-1">
           <div className="grid gap-2">
-            {visibleOptions.map(([value, formula, description]) => (
+            {visibleOptions.map(([value, numerator, description]) => (
               <label key={value} className="flex items-center gap-2 rounded-xl bg-[rgba(240,217,228,0.5)] px-3 py-2 text-sm font-bold text-[rgb(22,19,31)]">
                 <input type="checkbox" checked={selected.includes(value)} onChange={() => toggle(value)} />
-                <span className="whitespace-nowrap text-base"><Formula tokens={formula} /></span>
+                <span className="whitespace-nowrap text-base"><Formula numerator={numerator} /></span>
                 <span className="text-[rgb(74,63,75)]">— {description}</span>
               </label>
             ))}
