@@ -100,7 +100,13 @@ export function AppProvider({children}){
     setAxisBoundsByCondition(nextState.axisBoundsByCondition);
     return stack.slice(0,-1);
   });
-  const value=useMemo(()=>({params,setParams,hiddenGroupsByCondition,setHiddenGroupsFor,toggleGroup,axisBoundsByCondition,setAxisBoundsFor,toggleSyncLines,undo,redo,canUndo:undoStack.length>0,canRedo:redoStack.length>0}),[params,hiddenGroupsByCondition,axisBoundsByCondition,undoStack,redoStack]);
+  // Material search (header search field): a single global query highlighting
+  // matching points across every open chart. Kept out of undo/redo history and
+  // out of the backend request for the same reason as hiddenGroupsByCondition --
+  // it's a pure client-side display filter, not an action worth stepping through
+  // or something that should change what the backend counts as suitable.
+  const [searchQuery,setSearchQuery]=useState('');
+  const value=useMemo(()=>({params,setParams,hiddenGroupsByCondition,setHiddenGroupsFor,toggleGroup,axisBoundsByCondition,setAxisBoundsFor,toggleSyncLines,undo,redo,canUndo:undoStack.length>0,canRedo:redoStack.length>0,searchQuery,setSearchQuery}),[params,hiddenGroupsByCondition,axisBoundsByCondition,undoStack,redoStack,searchQuery]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
