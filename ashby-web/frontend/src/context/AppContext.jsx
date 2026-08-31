@@ -1,8 +1,9 @@
-import React, {createContext, useContext, useMemo, useState} from 'react';
+import React, {createContext, useContext, useEffect, useMemo, useRef, useState} from 'react';
 
 const AppContext = createContext(null);
 
 const defaultCondition = 'stiffness';
+const MAX_HISTORY = 30;
 
 export function AppProvider({children}){
   const [params,setParams]=useState({
@@ -47,7 +48,59 @@ export function AppProvider({children}){
     const intercepts = Object.fromEntries(current.map(condition => [condition, p.intercepts?.[condition] ?? p.intercept]));
     return {...p, syncLines, intercept: null, intercepts};
   });
-  const value=useMemo(()=>({params,setParams,hiddenGroupsByCondition,setHiddenGroupsFor,toggleGroup,axisBoundsByCondition,setAxisBoundsFor,toggleSyncLines}),[params,hiddenGroupsByCondition,axisBoundsByCondition]);
+  // Undo/Redo: tracks the criterion, preference, line position and axis bounds --
+  // everything in `params` + `axisBoundsByCondition` -- but deliberately NOT
+  // hiddenGroupsByCondition (legend visibility is a pure display filter, not an
+  // "action" worth stepping back through). A single effect watching both pieces
+  // of state is the one funnel every change already flows through (criterion
+  // picks, preference, axis-bound edits, index input/reset, line drags, sync
+  // toggling), so nothing needs to call into undo/redo directly.
+  const [undoStack,setUndoStack]=useState([]);
+  const [redoStack,setRedoStack]=useState([]);
+  const currentRef=useRef(null);
+  const restoringRef=useRef(false);
+  useEffect(()=>{
+    const key=JSON.stringify({params,axisBoundsByCondition});
+    if(restoringRef.current){
+      currentRef.current={key,params,axisBoundsByCondition};
+      restoringRef.current=false;
+      return;
+    }
+    const prev=currentRef.current;
+    if(prev&&prev.key!==key){
+      setUndoStack(stack=>{
+        const next=[...stack,{params:prev.params,axisBoundsByCondition:prev.axisBoundsByCondition}];
+        return next.length>MAX_HISTORY?next.slice(next.length-MAX_HISTORY):next;
+      });
+      setRedoStack([]);
+    }
+    currentRef.current={key,params,axisBoundsByCondition};
+  },[params,axisBoundsByCondition]);
+  const undo=()=>setUndoStack(stack=>{
+    if(!stack.length||!currentRef.current)return stack;
+    const prevState=stack[stack.length-1];
+    setRedoStack(r=>{
+      const next=[...r,{params:currentRef.current.params,axisBoundsByCondition:currentRef.current.axisBoundsByCondition}];
+      return next.length>MAX_HISTORY?next.slice(next.length-MAX_HISTORY):next;
+    });
+    restoringRef.current=true;
+    setParams(prevState.params);
+    setAxisBoundsByCondition(prevState.axisBoundsByCondition);
+    return stack.slice(0,-1);
+  });
+  const redo=()=>setRedoStack(stack=>{
+    if(!stack.length||!currentRef.current)return stack;
+    const nextState=stack[stack.length-1];
+    setUndoStack(u=>{
+      const next=[...u,{params:currentRef.current.params,axisBoundsByCondition:currentRef.current.axisBoundsByCondition}];
+      return next.length>MAX_HISTORY?next.slice(next.length-MAX_HISTORY):next;
+    });
+    restoringRef.current=true;
+    setParams(nextState.params);
+    setAxisBoundsByCondition(nextState.axisBoundsByCondition);
+    return stack.slice(0,-1);
+  });
+  const value=useMemo(()=>({params,setParams,hiddenGroupsByCondition,setHiddenGroupsFor,toggleGroup,axisBoundsByCondition,setAxisBoundsFor,toggleSyncLines,undo,redo,canUndo:undoStack.length>0,canRedo:redoStack.length>0}),[params,hiddenGroupsByCondition,axisBoundsByCondition,undoStack,redoStack]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
