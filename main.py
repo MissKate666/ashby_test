@@ -1,5 +1,5 @@
 import sys
-import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.patches import Polygon as MplPolygon
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QLocale, QPointF, QSize, Qt, QTimer
+from PyQt5.QtGui import QColor, QDoubleValidator, QIcon, QPainter, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -31,8 +32,26 @@ from PyQt5.QtWidgets import (
 )
 from shapely.geometry import LineString, MultiPoint, Point, Polygon
 
+from translation import MaterialTranslator
+
+
+@dataclass(frozen=True)
+class AshbyState:
+    """A snapshot of everything Undo/Redo can restore: the selected criterion and
+    preference, the condition line's position (a manual index value, or None for
+    auto/median), and the four axis-boundary text fields."""
+
+    condition_index: int
+    preference_index: int
+    index_manual_value: float | None
+    x_min: str
+    x_max: str
+    y_min: str
+    y_max: str
+
 
 class AshbyDiagramWindow(QMainWindow):
+
     def __init__(self):
         super().__init__()
         self.df = None
@@ -40,6 +59,7 @@ class AshbyDiagramWindow(QMainWindow):
         self.group_map = None
         self.dragging_line = False
         self.condition_intercept = None
+        self.index_manual_value = None
         self.line_artist = None
         self.hover_annotation = None
         self.material_artists = []
@@ -47,13 +67,24 @@ class AshbyDiagramWindow(QMainWindow):
         self.panning = False
         self.pan_start = None
         self.invalid_bounds_notified = False
-        self.translator = self.build_translator()
-        self.translation_cache = {}
-        self.translation_overrides = {
-            "Glasses": "Стекло",
-            "Natural": "Природные",
-        }
+        self._drag_ax = None
+        self._drag_cfg = None
+        self._drag_x_col = None
+        self._drag_y_col = None
+        self._drag_group_cache = {}
+        self._drag_subgroup_cache = {}
+        self._drag_material_cache = []
+        self._pending_drag_position = None
+        self._drag_timer = QTimer(self)
+        self._drag_timer.setSingleShot(True)
+        self._drag_timer.timeout.connect(self._process_drag_frame)
+        self.translator = MaterialTranslator()
         self.last_suitable_df = pd.DataFrame()
+        self.current_state = None
+        self.undo_stack = []
+        self.redo_stack = []
+        self.MAX_HISTORY = 30
+        self._restoring_state = False
         self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
         self.default_paths = {
             "groups": Path("materials_for_project/Group_materials.csv"),
@@ -85,14 +116,45 @@ class AshbyDiagramWindow(QMainWindow):
         cond_group = QGroupBox("Условия")
         cond_layout = QFormLayout()
         self.condition_combo = QComboBox()
-        self.condition_combo.addItems(["Не выбрано", "Лёгкость (E/ρ)", "Прочность (σ/ρ)", "Изгиб (√E/ρ)"])
+        self.condition_combo.addItems([
+            "Не выбрано",
+            "E/ρ — Жёсткость тяг",
+            "σ/ρ — Прочность тяг",
+            "√E/ρ — Жёсткость балок",
+            "E^(1/3)/ρ — Жёсткость пластин",
+            "σ^(2/3)/ρ — Прочность балок",
+            "E^(1/2)/ρ — Жёсткость колонн",
+        ])
         self.condition_combo.currentIndexChanged.connect(self.on_condition_changed)
         cond_layout.addRow("Критерий:", self.condition_combo)
+
+        self.index_value_input = QLineEdit()
+        self.index_value_input.setPlaceholderText("выберите критерий")
+        self.index_value_input.setToolTip("Нет данных для расчёта диапазона")
+        self.index_value_input.setEnabled(False)
+        self.index_value_validator = QDoubleValidator()
+        self.index_value_validator.setNotation(QDoubleValidator.ScientificNotation)
+        self.index_value_validator.setLocale(QLocale.c())
+        self.index_value_validator.setDecimals(6)
+        self.index_value_input.setValidator(self.index_value_validator)
+        self.index_value_input.editingFinished.connect(self.on_index_value_edited)
+        self.index_reset_btn = QPushButton("Сброс")
+        self.index_reset_btn.setToolTip("Вернуться к автоматическому значению (медиана по данным)")
+        self.index_reset_btn.setEnabled(False)
+        self.index_reset_btn.clicked.connect(self.on_index_reset)
+        index_row = QHBoxLayout()
+        index_row.setContentsMargins(0, 0, 0, 0)
+        index_row.addWidget(self.index_value_input)
+        index_row.addWidget(self.index_reset_btn)
+        index_row_widget = QWidget()
+        index_row_widget.setLayout(index_row)
+        cond_layout.addRow("Значение индекса:", index_row_widget)
 
         self.preference_combo = QComboBox()
         self.preference_combo.addItems(["Высокое значение", "Низкое значение"])
         self.preference_combo.currentIndexChanged.connect(self.update_plot)
         cond_layout.addRow("Подходит:", self.preference_combo)
+
         cond_group.setLayout(cond_layout)
         panel_layout.addWidget(cond_group)
 
@@ -154,6 +216,27 @@ class AshbyDiagramWindow(QMainWindow):
         self.counter_label = QLabel("Подходящих материалов: 0")
         self.counter_label.setStyleSheet("font-weight: 700; font-size: 22px;")
         plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
+
+        history_row = QHBoxLayout()
+        history_row.addStretch(1)
+        self.undo_btn = QPushButton(" Назад")
+        self.undo_btn.setIcon(self._make_arrow_icon("left"))
+        self.undo_btn.setIconSize(QSize(16, 16))
+        self.undo_btn.setToolTip("Отменить последнее действие")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self.undo_action)
+        self.redo_btn = QPushButton("Вперёд ")
+        self.redo_btn.setIcon(self._make_arrow_icon("right"))
+        self.redo_btn.setIconSize(QSize(16, 16))
+        self.redo_btn.setLayoutDirection(Qt.RightToLeft)
+        self.redo_btn.setToolTip("Повторить отменённое действие")
+        self.redo_btn.setEnabled(False)
+        self.redo_btn.clicked.connect(self.redo_action)
+        history_row.addWidget(self.undo_btn)
+        history_row.addWidget(self.redo_btn)
+        history_row.addStretch(1)
+        plot_layout.addLayout(history_row)
+
         self.figure = plt.figure(facecolor="#F8FAFC")
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setStyleSheet("background: #F8FAFC; border-radius: 12px;")
@@ -249,6 +332,26 @@ class AshbyDiagramWindow(QMainWindow):
         )
 
     @staticmethod
+    def _make_arrow_icon(direction, color="#334155", size=28):
+        """Draws a small filled chevron (left/right) into a QIcon at runtime, instead
+        of relying on plain text arrow glyphs (e.g. "<"/">"), for a crisper, resolution
+        -independent icon with no external asset files."""
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(color))
+        w, h = size, size
+        if direction == "left":
+            points = [QPointF(w * 0.68, h * 0.14), QPointF(w * 0.28, h * 0.5), QPointF(w * 0.68, h * 0.86)]
+        else:
+            points = [QPointF(w * 0.32, h * 0.14), QPointF(w * 0.72, h * 0.5), QPointF(w * 0.32, h * 0.86)]
+        painter.drawPolygon(QPolygonF(points))
+        painter.end()
+        return QIcon(pixmap)
+
+    @staticmethod
     def lighten_color(hex_color, factor=0.65):
         hex_color = hex_color.lstrip("#")
         r = int(hex_color[0:2], 16)
@@ -285,13 +388,10 @@ class AshbyDiagramWindow(QMainWindow):
                 missing = sorted(expected_groups - found_groups)
                 raise ValueError(f"В диаграмме отсутствуют обязательные группы: {missing}")
 
-            if self.translator is None:
-                raise RuntimeError("Не удалось инициализировать библиотеку перевода. Проверьте подключение к интернету и доступ к pip.")
-
-            self.groups_df["group_name"] = self.translate_series_to_russian(self.groups_df["group_name"])
+            self.groups_df["group_name"] = self.translator.translate_series(self.groups_df["group_name"])
             for col in ["group_name", "subgroup_name", "material_name"]:
                 if col in merged.columns:
-                    merged[col] = self.translate_series_to_russian(merged[col])
+                    merged[col] = self.translator.translate_series(merged[col])
 
             self.df = merged.reset_index(drop=True)
             self.info_label.setText(f"Загружено материалов: {len(self.df)}")
@@ -337,24 +437,137 @@ class AshbyDiagramWindow(QMainWindow):
             return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
         if idx == 3:
             return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
+        if idx == 4:
+            return {"y_col": "Youngs_Modulus_GPa", "m": 3.0, "label": "E^(1/3)/ρ", "to_b": lambda v: 3 * np.log10(v), "from_b": lambda b: 10 ** (b / 3)}
+        if idx == 5:
+            return {"y_col": "Strength_MPa", "m": 1.5, "label": "σ^(2/3)/ρ", "to_b": lambda v: 1.5 * np.log10(v), "from_b": lambda b: 10 ** (b / 1.5)}
+        if idx == 6:
+            # Same merit index (and slope) as √E/ρ above -- E^(1/2)/ρ is the standard
+            # Ashby merit index for both light stiff beams in bending and light stiff
+            # columns in buckling, so the two entries share m/to_b/from_b by design.
+            return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "E^(1/2)/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
         return None
 
-    def on_condition_changed(self):
+    def filtered_ratio_values(self):
+        """Index values (E/rho, sigma/rho, E^(1/3)/rho, ...) for the current criterion,
+        computed directly from density and the criterion's y-column via its own
+        log-log formula -- not read from precomputed CSV columns, which don't exist
+        for every criterion and (checked against the dataset) don't reliably agree
+        with the actual line formula anyway. Restricted to materials that satisfy the
+        current axis-range filters, so both the valid input range and the "auto"
+        median stay in sync with those filters and with the line's own equation."""
+        cfg = self.current_condition_config()
+        if cfg is None or self.df is None:
+            return None
+        x = pd.to_numeric(self.df["Density_kg_m3"], errors="coerce")
+        y = pd.to_numeric(self.df[cfg["y_col"]], errors="coerce")
+        valid = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
+        xmin = self.parse_optional_float(self.x_min_input)
+        xmax = self.parse_optional_float(self.x_max_input)
+        ymin = self.parse_optional_float(self.y_min_input)
+        ymax = self.parse_optional_float(self.y_max_input)
+        if xmin is not None:
+            valid &= x >= xmin
+        if xmax is not None:
+            valid &= x <= xmax
+        if ymin is not None:
+            valid &= y >= ymin
+        if ymax is not None:
+            valid &= y <= ymax
+        if not valid.any():
+            return None
+        lx = np.log10(x[valid])
+        ly = np.log10(y[valid])
+        ratios = cfg["from_b"](ly - cfg["m"] * lx)
+        ratios = ratios[np.isfinite(ratios) & (ratios > 0)]
+        return ratios if len(ratios) else None
+
+    def index_value_range(self):
+        ratios = self.filtered_ratio_values()
+        if ratios is None:
+            return None
+        return float(ratios.min()), float(ratios.max())
+
+    def resolve_condition_intercept(self, cfg):
+        """The working log-space intercept: from the manual override if the user has
+        fixed one, otherwise the median of the current, filter-adjusted data -- "auto"
+        mode, recomputed every redraw so it tracks criteria/filter changes live."""
+        if self.index_manual_value is not None:
+            return cfg["to_b"](self.index_manual_value)
+        ratios = self.filtered_ratio_values()
+        if ratios is not None:
+            return float(cfg["to_b"](float(ratios.median())))
+        return 0.0
+
+    def refresh_index_value_controls(self):
+        """Sync the field/Reset button/validator range/tooltip to the current criterion,
+        filters and auto/manual state. Called on every redraw so it never goes stale."""
+        no_range_tooltip = "Нет данных для расчёта диапазона"
         cfg = self.current_condition_config()
         if cfg is None:
-            self.condition_intercept = None
+            self.index_value_input.setEnabled(False)
+            self.index_reset_btn.setEnabled(False)
+            self.index_value_input.setPlaceholderText("выберите критерий")
+            self.index_value_input.setToolTip(no_range_tooltip)
+            if not self.index_value_input.hasFocus():
+                self.index_value_input.clear()
+            return
+        rng = self.index_value_range()
+        self.index_value_input.setEnabled(rng is not None)
+        self.index_reset_btn.setEnabled(rng is not None and self.index_manual_value is not None)
+        if rng is not None:
+            lo, hi = rng
+            self.index_value_validator.setRange(lo, hi, 6)
+            self.index_value_input.setPlaceholderText("Авто (вычисляется по данным)")
+            self.index_value_input.setToolTip(f"Допустимый диапазон: {lo:.4g} — {hi:.4g}")
+        else:
+            self.index_value_input.setPlaceholderText("нет данных")
+            self.index_value_input.setToolTip(no_range_tooltip)
+        if not self.index_value_input.hasFocus():
+            if self.index_manual_value is not None:
+                self.index_value_input.setText(f"{self.index_manual_value:.6g}")
+            else:
+                self.index_value_input.clear()
+
+    def on_condition_changed(self):
+        self.index_manual_value = None
+        self.update_plot()
+
+    def on_index_reset(self):
+        self.index_manual_value = None
+        self.update_plot()
+
+    def on_index_value_edited(self):
+        cfg = self.current_condition_config()
+        if cfg is None:
+            return
+        text = self.index_value_input.text().strip().replace(",", ".")
+        if not text:
+            self.index_manual_value = None
             self.update_plot()
             return
-        if self.df is not None and len(self.df):
-            if self.condition_combo.currentIndex() == 1:
-                idx = pd.to_numeric(self.df["E_over_rho"], errors="coerce")
-            elif self.condition_combo.currentIndex() == 2:
-                idx = pd.to_numeric(self.df["Strength_over_rho"], errors="coerce")
-            else:
-                idx = pd.to_numeric(self.df["SqrtE_over_rho"], errors="coerce")
-            idx = idx[(idx > 0) & np.isfinite(idx)]
-            if len(idx):
-                self.condition_intercept = cfg["to_b"](float(idx.median()))
+        try:
+            value = float(text)
+        except ValueError:
+            self.update_plot()
+            return
+        if value <= 0:
+            QMessageBox.warning(self, "Некорректное значение", "Значение индекса должно быть положительным числом.")
+            self.update_plot()
+            return
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            if value < lo or value > hi:
+                QMessageBox.warning(
+                    self,
+                    "Значение вне диапазона",
+                    f"Допустимый диапазон для текущего критерия: {lo:.4g} – {hi:.4g}.\n"
+                    "Введённое значение не применено.",
+                )
+                self.update_plot()
+                return
+        self.index_manual_value = value
         self.update_plot()
 
     @staticmethod
@@ -366,97 +579,6 @@ class AshbyDiagramWindow(QMainWindow):
             return float(text)
         except ValueError:
             return None
-
-    def translate_series_to_russian(self, series: pd.Series) -> pd.Series:
-        if self.translator is None:
-            return series
-
-        def translate_value(value):
-            if pd.isna(value):
-                return value
-            text = str(value).strip()
-            if not text:
-                return value
-            if text in self.translation_overrides:
-                return self.translation_overrides[text]
-            if text in self.translation_cache:
-                return self.translation_cache[text]
-            try:
-                translated = self.translator.translate(text)
-                self.translation_cache[text] = translated if translated else text
-                return self.translation_cache[text]
-            except Exception:
-                self.translation_cache[text] = text
-                return text
-
-        return series.map(translate_value)
-
-    def build_translator(self):
-        translator = self.build_deep_translator()
-        if translator is not None:
-            return translator
-        return self.build_googletrans_translator()
-
-    @staticmethod
-    def install_package(package_name):
-        try:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", package_name],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return True
-        except Exception:
-            return False
-
-    def build_deep_translator(self):
-        try:
-            from deep_translator import GoogleTranslator, MyMemoryTranslator
-        except ImportError:
-            if not self.install_package("deep-translator"):
-                return None
-            try:
-                from deep_translator import GoogleTranslator, MyMemoryTranslator
-            except Exception:
-                return None
-
-        backends = [
-            GoogleTranslator(source="auto", target="ru"),
-            MyMemoryTranslator(source="en-US", target="ru-RU"),
-        ]
-        for backend in backends:
-            try:
-                if backend.translate("Steel"):
-                    return backend
-            except Exception:
-                continue
-        return None
-
-    def build_googletrans_translator(self):
-        try:
-            from googletrans import Translator as GoogleTransTranslator
-        except ImportError:
-            if not self.install_package("googletrans==4.0.0-rc1"):
-                return None
-            try:
-                from googletrans import Translator as GoogleTransTranslator
-            except Exception:
-                return None
-
-        class GoogleTransAdapter:
-            def __init__(self):
-                self.translator = GoogleTransTranslator()
-
-            def translate(self, text):
-                return self.translator.translate(text, dest="ru").text
-
-        try:
-            adapter = GoogleTransAdapter()
-            if adapter.translate("Steel"):
-                return adapter
-        except Exception:
-            return None
-        return None
 
     def validate_axis_bounds(self):
         xmin = self.parse_optional_float(self.x_min_input)
@@ -489,9 +611,7 @@ class AshbyDiagramWindow(QMainWindow):
         ly = np.log10(y[mask])
 
         if cfg is not None:
-            if self.condition_intercept is None:
-                ratios = ly - cfg["m"] * lx
-                self.condition_intercept = float(np.nanmedian(ratios))
+            self.condition_intercept = self.resolve_condition_intercept(cfg)
             line_vals = cfg["m"] * lx + self.condition_intercept
             high_side = self.preference_combo.currentIndex() == 0
             if high_side:
@@ -589,6 +709,75 @@ class AshbyDiagramWindow(QMainWindow):
         coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
         return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor="white", alpha=0.85, linewidth=0.5, zorder=4)
 
+    def _snapshot_state(self):
+        return AshbyState(
+            condition_index=self.condition_combo.currentIndex(),
+            preference_index=self.preference_combo.currentIndex(),
+            index_manual_value=self.index_manual_value,
+            x_min=self.x_min_input.text(),
+            x_max=self.x_max_input.text(),
+            y_min=self.y_min_input.text(),
+            y_max=self.y_max_input.text(),
+        )
+
+    def _apply_state(self, state):
+        self._restoring_state = True
+        try:
+            self.condition_combo.setCurrentIndex(state.condition_index)
+            self.preference_combo.setCurrentIndex(state.preference_index)
+            self.x_min_input.setText(state.x_min)
+            self.x_max_input.setText(state.x_max)
+            self.y_min_input.setText(state.y_min)
+            self.y_max_input.setText(state.y_max)
+            self.index_manual_value = state.index_manual_value
+            self.update_plot()
+        finally:
+            self._restoring_state = False
+
+    def _maybe_record_state(self):
+        """Called at the end of every successful update_plot() -- the common funnel for
+        criterion changes, preference changes, axis-boundary edits, index input/reset and
+        line drags. Pushes the *previous* current state onto the undo stack whenever the
+        state actually changed, and clears the redo stack (a new change invalidates any
+        previously-undone "future"). Skipped while restoring a state ourselves so
+        undo/redo clicks don't record themselves as new history."""
+        if self._restoring_state:
+            return
+        new_state = self._snapshot_state()
+        if self.current_state is not None and new_state != self.current_state:
+            self.undo_stack.append(self.current_state)
+            if len(self.undo_stack) > self.MAX_HISTORY:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+        self.current_state = new_state
+        self._update_undo_redo_buttons()
+
+    def _update_undo_redo_buttons(self):
+        self.undo_btn.setEnabled(bool(self.undo_stack))
+        self.redo_btn.setEnabled(bool(self.redo_stack))
+
+    def undo_action(self):
+        if not self.undo_stack or self.current_state is None:
+            return
+        prev_state = self.undo_stack.pop()
+        self.redo_stack.append(self.current_state)
+        if len(self.redo_stack) > self.MAX_HISTORY:
+            self.redo_stack.pop(0)
+        self.current_state = prev_state
+        self._apply_state(prev_state)
+        self._update_undo_redo_buttons()
+
+    def redo_action(self):
+        if not self.redo_stack or self.current_state is None:
+            return
+        next_state = self.redo_stack.pop()
+        self.undo_stack.append(self.current_state)
+        if len(self.undo_stack) > self.MAX_HISTORY:
+            self.undo_stack.pop(0)
+        self.current_state = next_state
+        self._apply_state(next_state)
+        self._update_undo_redo_buttons()
+
     def update_plot(self):
         if self.df is None:
             return
@@ -611,6 +800,9 @@ class AshbyDiagramWindow(QMainWindow):
         self.material_artists = []
         self.material_points = []
         self.hover_annotation = None
+        self._drag_group_cache = {}
+        self._drag_subgroup_cache = {}
+        self._drag_material_cache = []
 
         x_vals = pd.to_numeric(valid_df[x_col], errors="coerce")
         y_vals = pd.to_numeric(valid_df[y_col], errors="coerce")
@@ -647,6 +839,7 @@ class AshbyDiagramWindow(QMainWindow):
             if patch is not None:
                 ax.add_patch(patch)
                 group_patch_by_id[gid] = patch
+                self._drag_group_cache[gid] = (patch, gdf.index)
                 verts = patch.get_xy()
                 group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
 
@@ -665,6 +858,7 @@ class AshbyDiagramWindow(QMainWindow):
             spatch = self.geometry_to_patch(sgeom, color=subgroup_color, alpha=sub_alpha, lw=1.5 if sub_ok else 0.8, zorder=1.2)
             if spatch is not None:
                 ax.add_patch(spatch)
+                self._drag_subgroup_cache[sname] = (spatch, sdf.index)
 
         for idx, row in valid_df.iterrows():
             is_ok = bool(suitable_mask.loc[idx])
@@ -680,6 +874,7 @@ class AshbyDiagramWindow(QMainWindow):
             tip_text = f"{material_name}\nПодгруппа: {subgroup_name}"
             self.material_artists.append((patch, tip_text))
             self.material_points.append((float(row[x_col]), float(row[y_col]), tip_text))
+            self._drag_material_cache.append((patch, idx))
 
         if group_bounds:
             gx0 = min(b[0] for b in group_bounds)
@@ -718,19 +913,7 @@ class AshbyDiagramWindow(QMainWindow):
             ax.fill_between([xlo, xhi], ylo, yhi, color="#00BCD4", alpha=0.08, zorder=0)
 
         suitable_df = self.df[suitable_mask].copy()
-        self.last_suitable_df = suitable_df
-        self.counter_label.setText(f"Подходящих материалов: {len(suitable_df)}")
-
-        if cfg is not None and self.condition_intercept is not None:
-            line_val = cfg["from_b"](self.condition_intercept)
-            line_info = f"Линия {cfg['label']} = {line_val:.4g}"
-        else:
-            line_info = "Условие пока не выбрано"
-        self.info_label.setText(
-            f"Материалов: {len(self.df)}\n"
-            f"Подходящих: {len(suitable_df)}\n"
-            f"{line_info}"
-        )
+        self._update_status_labels(suitable_df, cfg)
 
         ax.set_xlim(*x_lim)
         ax.set_ylim(*y_lim)
@@ -751,16 +934,120 @@ class AshbyDiagramWindow(QMainWindow):
         if self.line_artist is not None:
             ax.legend(loc="lower left")
         self.figure.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.1)
+        self._drag_ax = ax
+        self._drag_cfg = cfg
+        self._drag_x_col = x_col
+        self._drag_y_col = y_col
         self.canvas.draw_idle()
+        self._maybe_record_state()
 
-    def update_line_from_y(self, y_data, x_reference):
+    def _apply_line_value(self, y_data, x_reference):
+        """Pure calc: resolve a dragged y position into the (clamped) index value and
+        the matching log-space intercept, without touching the plot. Returns False if
+        the position can't be resolved (e.g. the mouse left the valid log-scale area)."""
         if y_data is None or y_data <= 0 or x_reference <= 0:
-            return
+            return False
         cfg = self.current_condition_config()
         if cfg is None:
+            return False
+        intercept = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
+        value = cfg["from_b"](intercept)
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            value = max(lo, min(hi, value))
+        self.index_manual_value = value
+        self.condition_intercept = cfg["to_b"](value)
+        return True
+
+    def update_line_from_y(self, y_data, x_reference):
+        if self._apply_line_value(y_data, x_reference):
+            self.update_plot()
+
+    def _schedule_drag_frame(self):
+        """requestAnimationFrame-style coalescing: at most one redraw per ~16ms frame,
+        always using the latest pending mouse position so a slow frame never leaves the
+        line lagging behind and only catching up on mouse release."""
+        if not self._drag_timer.isActive():
+            self._drag_timer.start(16)
+
+    def _process_drag_frame(self):
+        if self._pending_drag_position is None:
             return
-        self.condition_intercept = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
-        self.update_plot()
+        y_data, x_reference = self._pending_drag_position
+        self._pending_drag_position = None
+        if self._apply_line_value(y_data, x_reference):
+            self._refresh_line_fast()
+
+    def _update_status_labels(self, suitable_df, cfg):
+        self.last_suitable_df = suitable_df
+        self.counter_label.setText(f"Подходящих материалов: {len(suitable_df)}")
+
+        if cfg is not None and self.condition_intercept is not None:
+            line_val = cfg["from_b"](self.condition_intercept)
+            mode_suffix = " (авто)" if self.index_manual_value is None else ""
+            line_info = f"Линия {cfg['label']} = {line_val:.4g}{mode_suffix}"
+            if self.line_artist is not None:
+                self.line_artist.set_label(f"Условие {cfg['label']} = {line_val:.4g}{mode_suffix}")
+        else:
+            line_info = "Условие пока не выбрано"
+        self.refresh_index_value_controls()
+        self.info_label.setText(
+            f"Материалов: {len(self.df)}\n"
+            f"Подходящих: {len(suitable_df)}\n"
+            f"{line_info}"
+        )
+
+    def _refresh_line_fast(self):
+        """Live-drag redraw: reuses the group/subgroup/material patches cached by the
+        last full update_plot() and only recomputes what actually changes while the
+        line moves (suitability + line position), instead of clearing the figure and
+        rebuilding every shapely blob from scratch on every mouse-move event."""
+        cfg = self.current_condition_config()
+        if (
+            self.df is None
+            or cfg is None
+            or self._drag_ax is None
+            or self._drag_cfg is None
+            or cfg["label"] != self._drag_cfg["label"]
+            or self.condition_intercept is None
+        ):
+            self.update_plot()
+            return
+
+        x, y, suitable_mask, valid_mask = self.build_mask(self.df, self._drag_x_col, self._drag_y_col)
+
+        for gid, (patch, idx) in self._drag_group_cache.items():
+            ok = bool(suitable_mask.loc[idx].any())
+            patch.set_alpha(0.23 if ok else 0.08)
+            patch.set_linewidth(2.0 if ok else 1.0)
+
+        for sname, (patch, idx) in self._drag_subgroup_cache.items():
+            ok = bool(suitable_mask.loc[idx].any())
+            patch.set_alpha(0.2 if ok else 0.06)
+            patch.set_linewidth(1.5 if ok else 0.8)
+
+        for patch, idx in self._drag_material_cache:
+            is_ok = bool(suitable_mask.loc[idx])
+            patch.set_alpha(0.9 if is_ok else 0.2)
+
+        ax = self._drag_ax
+        x_lim = ax.get_xlim()
+        xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
+        yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
+        if self.line_artist is not None:
+            self.line_artist.set_data(xx, yy)
+            line_val = cfg["from_b"](self.condition_intercept)
+            mode_suffix = " (авто)" if self.index_manual_value is None else ""
+            label = f"Условие {cfg['label']} = {line_val:.4g}{mode_suffix}"
+            self.line_artist.set_label(label)
+            legend = ax.get_legend()
+            if legend is not None and legend.get_texts():
+                legend.get_texts()[0].set_text(label)
+
+        suitable_df = self.df[suitable_mask].copy()
+        self._update_status_labels(suitable_df, cfg)
+        self.canvas.draw_idle()
 
     def on_press(self, event):
         if event.button == 2 and event.inaxes is not None:
@@ -779,7 +1066,8 @@ class AshbyDiagramWindow(QMainWindow):
         if self.dragging_line:
             xlim = event.inaxes.get_xlim()
             x_ref = np.sqrt(xlim[0] * xlim[1])
-            self.update_line_from_y(event.ydata, x_ref)
+            self._pending_drag_position = (event.ydata, x_ref)
+            self._schedule_drag_frame()
             return
         if self.panning and self.pan_start is not None:
             start_x, start_y, xlim0, ylim0 = self.pan_start
@@ -795,12 +1083,20 @@ class AshbyDiagramWindow(QMainWindow):
         self.update_material_hover(event)
 
     def on_release(self, event):
+        was_dragging = self.dragging_line
         self.dragging_line = False
         self.panning = False
         self.pan_start = None
+        if was_dragging:
+            self._drag_timer.stop()
+            self._pending_drag_position = None
+            self.update_plot()
 
     def on_scroll(self, event):
         if event.inaxes is None:
+            return
+        if self.line_artist is not None and self.line_artist.contains(event)[0]:
+            self.shift_condition_line(+0.04 if event.button == "up" else -0.04)
             return
         self.zoom_plot(0.88 if event.button == "up" else 1.14)
 
@@ -816,9 +1112,16 @@ class AshbyDiagramWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def shift_condition_line(self, step):
-        if self.current_condition_config() is None:
+        cfg = self.current_condition_config()
+        if cfg is None:
             return
-        self.condition_intercept = (self.condition_intercept or 0.0) + step
+        baseline = self.condition_intercept if self.condition_intercept is not None else self.resolve_condition_intercept(cfg)
+        intercept = baseline + step
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            intercept = max(cfg["to_b"](lo), min(cfg["to_b"](hi), intercept))
+        self.index_manual_value = cfg["from_b"](intercept)
         self.update_plot()
 
     def update_material_hover(self, event):
