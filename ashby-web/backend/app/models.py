@@ -9,6 +9,9 @@ class Condition(str, Enum):
     stiffness = "stiffness"
     strength = "strength"
     bending = "bending"
+    plate_stiffness = "plate_stiffness"
+    beam_strength = "beam_strength"
+    column_stiffness = "column_stiffness"
 
 
 class Preference(str, Enum):

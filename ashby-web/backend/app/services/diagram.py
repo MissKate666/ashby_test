@@ -10,11 +10,20 @@ from app.models import AnalyzeRequest, AnalyzeResponse, Condition, ConditionLine
 
 def current_condition_config(condition: Condition):
     if condition == Condition.stiffness:
-        return {"y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ", "ratio_col": "E_over_rho", "to_b": lambda v: np.log10(v)}
+        return {"y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ", "to_b": lambda v: np.log10(v)}
     if condition == Condition.strength:
-        return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "ratio_col": "Strength_over_rho", "to_b": lambda v: np.log10(v)}
+        return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "to_b": lambda v: np.log10(v)}
     if condition == Condition.bending:
-        return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "ratio_col": "SqrtE_over_rho", "to_b": lambda v: 2 * np.log10(v)}
+        return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v)}
+    if condition == Condition.plate_stiffness:
+        return {"y_col": "Youngs_Modulus_GPa", "m": 3.0, "label": "E^(1/3)/ρ", "to_b": lambda v: 3 * np.log10(v)}
+    if condition == Condition.beam_strength:
+        return {"y_col": "Strength_MPa", "m": 1.5, "label": "σ^(2/3)/ρ", "to_b": lambda v: 1.5 * np.log10(v)}
+    if condition == Condition.column_stiffness:
+        # Same merit index (and slope) as `bending` above -- E^(1/2)/ρ is the standard
+        # Ashby index for both light stiff beams in bending and light stiff columns in
+        # buckling, so these two conditions share m/to_b by design, not by mistake.
+        return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "E^(1/2)/ρ", "to_b": lambda v: 2 * np.log10(v)}
     return None
 
 
@@ -98,9 +107,19 @@ def analyze(df: pd.DataFrame, groups_df: pd.DataFrame, request: AnalyzeRequest) 
     base_valid = (pd.to_numeric(df[x_col], errors="coerce") > 0) & (pd.to_numeric(df[y_col], errors="coerce") > 0)
     intercept = request.intercept
     if cfg and intercept is None:
-        ratios = pd.to_numeric(df.loc[base_valid, cfg["ratio_col"]], errors="coerce")
-        ratios = ratios[(ratios > 0) & np.isfinite(ratios)]
-        intercept = float(cfg["to_b"](float(ratios.median()))) if len(ratios) else 0.0
+        # Auto/median mode: the intercept in log-log "b" space is directly
+        # log10(y) - m*log10(x) for each material (to_b(index) == that same
+        # expression by construction for every condition above), and since to_b
+        # is monotonic, median(to_b(index)) == to_b(median(index)) -- so the
+        # median of this expression *is* the auto intercept, no per-material
+        # ratio column needed (those don't exist for every condition, and
+        # checking them against this dataset showed they don't reliably match
+        # this formula for the ones that do have one).
+        lx_all = np.log10(pd.to_numeric(df.loc[base_valid, "Density_kg_m3"], errors="coerce"))
+        ly_all = np.log10(pd.to_numeric(df.loc[base_valid, cfg["y_col"]], errors="coerce"))
+        b_vals = ly_all - cfg["m"] * lx_all
+        b_vals = b_vals[np.isfinite(b_vals)]
+        intercept = float(b_vals.median()) if len(b_vals) else 0.0
     intercept = float(intercept or 0.0)
     x, y, suitable, valid = build_mask(df, request, x_col, y_col, intercept)
     valid_df = df[valid].copy()

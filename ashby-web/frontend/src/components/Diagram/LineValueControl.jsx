@@ -1,8 +1,6 @@
 import React, {useEffect, useState} from 'react';
 import {useApp} from '../../context/AppContext';
 
-const RATIO_FIELD = {stiffness: 'e_over_rho', strength: 'strength_over_rho', bending: 'sqrte_over_rho'};
-
 const isSet = v => v !== '' && v !== null && v !== undefined;
 
 function formatValue(value) {
@@ -10,9 +8,14 @@ function formatValue(value) {
   return Number(value.toPrecision(6)).toString();
 }
 
-function computeRange(data, params, condition) {
-  const field = RATIO_FIELD[condition];
-  if (!field || !data?.points?.length) return null;
+// Computed directly from each point's own x (density) and y (whichever property
+// the current criterion uses) via the criterion's slope, exactly mirroring the
+// backend's own formula (see diagram.py's analyze()) -- not read from a fixed
+// per-criterion CSV column, which doesn't exist for every criterion and (checked
+// against the dataset) doesn't reliably match this formula for the ones that do.
+function computeRange(data, params) {
+  const slope = data?.condition_line?.slope;
+  if (!slope || !data?.points?.length) return null;
   const values = data.points
     .filter(p => {
       if (isSet(params.x_min) && p.x < Number(params.x_min)) return false;
@@ -21,7 +24,7 @@ function computeRange(data, params, condition) {
       if (isSet(params.y_max) && p.y > Number(params.y_max)) return false;
       return true;
     })
-    .map(p => p[field])
+    .map(p => 10 ** ((Math.log10(p.y) - slope * Math.log10(p.x)) / slope))
     .filter(v => typeof v === 'number' && isFinite(v) && v > 0);
   if (!values.length) return null;
   return [Math.min(...values), Math.max(...values)];
@@ -32,7 +35,7 @@ export default function LineValueControl({condition, data}) {
   const line = data?.condition_line;
   const currentValue = line && line.slope ? 10 ** (line.intercept / line.slope) : null;
   const manualActive = isSet(params.intercepts?.[condition]) || (params.syncLines && isSet(params.intercept));
-  const range = computeRange(data, params, condition);
+  const range = computeRange(data, params);
   const disabled = !line || !range;
 
   const [text, setText] = useState('');
