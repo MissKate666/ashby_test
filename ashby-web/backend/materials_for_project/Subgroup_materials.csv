@@ -1,0 +1,15 @@
+﻿subgroup_id,group_id,subgroup_name
+1,1,Steels
+2,1,Aluminum Alloys
+3,1,Titanium Alloys
+4,1,Copper Alloys
+5,2,Thermoplastics
+6,2,Thermosets
+7,3,Oxides
+8,3,Carbides
+9,4,Fiber Reinforced
+10,5,Natural Fibers
+11,6,Polymer Foams
+12,6,Metal Foams
+13,7,Rubbers
+14,8,Technical Glasses

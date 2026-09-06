@@ -1,490 +1,1339 @@
 import sys
-import pandas as pd
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse
+import matplotlib.patheffects as pe
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QComboBox, QPushButton, QLabel,
-                             QFileDialog, QMessageBox, QGroupBox, QGridLayout,
-                             QCheckBox)
-from PyQt5.QtCore import Qt
+from matplotlib.patches import Polygon as MplPolygon
+from PyQt5.QtCore import QLocale, QPointF, QSize, Qt, QTimer
+from PyQt5.QtGui import QColor, QDoubleValidator, QIcon, QPainter, QPixmap, QPolygonF
+from PyQt5.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QHeaderView,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+from shapely.geometry import LineString, MultiPoint, Point, Polygon
+
+from translation import MaterialTranslator
+
+
+@dataclass(frozen=True)
+class AshbyState:
+    """A snapshot of everything Undo/Redo can restore: the selected criterion and
+    preference, the condition line's position (a manual index value, or None for
+    auto/median), and the four axis-boundary text fields."""
+
+    condition_index: int
+    preference_index: int
+    index_manual_value: float | None
+    x_min: str
+    x_max: str
+    y_min: str
+    y_max: str
 
 
 class AshbyDiagramWindow(QMainWindow):
+
     def __init__(self):
         super().__init__()
         self.df = None
-        self.initUI()
+        self.groups_df = None
+        self.group_map = None
+        self.dragging_line = False
+        self.condition_intercept = None
+        self.index_manual_value = None
+        self.line_artist = None
+        self.hover_annotation = None
+        self.material_artists = []
+        self.material_points = []
+        self.panning = False
+        self.pan_start = None
+        self.invalid_bounds_notified = False
+        self._drag_ax = None
+        self._drag_cfg = None
+        self._drag_x_col = None
+        self._drag_y_col = None
+        self._drag_group_cache = {}
+        self._drag_subgroup_cache = {}
+        self._drag_material_cache = []
+        self._pending_drag_position = None
+        self._drag_timer = QTimer(self)
+        self._drag_timer.setSingleShot(True)
+        self._drag_timer.timeout.connect(self._process_drag_frame)
+        self.translator = MaterialTranslator()
+        self.last_suitable_df = pd.DataFrame()
+        self.current_state = None
+        self.undo_stack = []
+        self.redo_stack = []
+        self.MAX_HISTORY = 30
+        self._restoring_state = False
+        self.group_colors = ["#003F88", "#D90429", "#2B9348", "#FFBA08", "#111111", "#00B4D8", "#F72585", "#FB5607", "#70E000", "#8338EC"]
+        self.default_paths = {
+            "groups": Path("materials_for_project/Group_materials.csv"),
+            "subgroups": Path("materials_for_project/Subgroup_materials.csv"),
+            "materials": Path("materials_for_project/Dataset_for_Ashby.csv"),
+        }
+        self.init_ui()
+        self.load_default_data()
 
-    def initUI(self):
-        self.setWindowTitle('Ashby Diagram Generator - Materials Project')
-        self.setGeometry(100, 100, 1300, 900)
+    def init_ui(self):
+        self.setWindowTitle("Селектор Эшби")
+        self.setGeometry(100, 80, 1450, 900)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.apply_modern_theme()
 
-        # Центральный виджет
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(18, 18, 18, 18)
+        main_layout.setSpacing(16)
 
-        # Основной layout
-        main_layout = QHBoxLayout(central_widget)
+        panel = QWidget()
+        panel.setObjectName("controlPanel")
+        panel.setMaximumWidth(500)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 16, 16, 16)
+        panel_layout.setSpacing(12)
 
-        # Левая панель с настройками
-        control_panel = QWidget()
-        control_panel.setMaximumWidth(350)
-        control_layout = QVBoxLayout(control_panel)
+        cond_group = QGroupBox("Условия")
+        cond_layout = QFormLayout()
+        self.condition_combo = QComboBox()
+        self.condition_combo.addItems([
+            "Не выбрано",
+            "E/ρ — Жёсткость тяг",
+            "σ/ρ — Прочность тяг",
+            "√E/ρ — Жёсткость балок",
+            "E^(1/3)/ρ — Жёсткость пластин",
+            "σ^(2/3)/ρ — Прочность балок",
+            "E^(1/2)/ρ — Жёсткость колонн",
+        ])
+        self.condition_combo.currentIndexChanged.connect(self.on_condition_changed)
+        cond_layout.addRow("Критерий:", self.condition_combo)
 
-        # Группа загрузки файла
-        file_group = QGroupBox("File Selection")
-        file_layout = QVBoxLayout()
+        self.index_value_input = QLineEdit()
+        self.index_value_input.setPlaceholderText("выберите критерий")
+        self.index_value_input.setToolTip("Нет данных для расчёта диапазона")
+        self.index_value_input.setEnabled(False)
+        self.index_value_validator = QDoubleValidator()
+        self.index_value_validator.setNotation(QDoubleValidator.ScientificNotation)
+        self.index_value_validator.setLocale(QLocale.c())
+        self.index_value_validator.setDecimals(6)
+        self.index_value_input.setValidator(self.index_value_validator)
+        self.index_value_input.editingFinished.connect(self.on_index_value_edited)
+        self.index_reset_btn = QPushButton("Сброс")
+        self.index_reset_btn.setToolTip("Вернуться к автоматическому значению (медиана по данным)")
+        self.index_reset_btn.setEnabled(False)
+        self.index_reset_btn.clicked.connect(self.on_index_reset)
+        index_row = QHBoxLayout()
+        index_row.setContentsMargins(0, 0, 0, 0)
+        index_row.addWidget(self.index_value_input)
+        index_row.addWidget(self.index_reset_btn)
+        index_row_widget = QWidget()
+        index_row_widget.setLayout(index_row)
+        cond_layout.addRow("Значение индекса:", index_row_widget)
 
-        self.load_btn = QPushButton('Load CSV File (mp_all.csv)')
-        self.load_btn.clicked.connect(self.load_csv)
-        file_layout.addWidget(self.load_btn)
+        self.preference_combo = QComboBox()
+        self.preference_combo.addItems(["Высокое значение", "Низкое значение"])
+        self.preference_combo.currentIndexChanged.connect(self.update_plot)
+        cond_layout.addRow("Подходит:", self.preference_combo)
 
-        self.file_label = QLabel('No file loaded')
-        self.file_label.setWordWrap(True)
-        file_layout.addWidget(self.file_label)
+        cond_group.setLayout(cond_layout)
+        panel_layout.addWidget(cond_group)
 
-        file_group.setLayout(file_layout)
-        control_layout.addWidget(file_group)
+        axis_group = QGroupBox("Диапазон по осям (опционально)")
+        axis_layout = QGridLayout()
+        self.x_min_input = QLineEdit()
+        self.x_max_input = QLineEdit()
+        self.y_min_input = QLineEdit()
+        self.y_max_input = QLineEdit()
+        for w in [self.x_min_input, self.x_max_input, self.y_min_input, self.y_max_input]:
+            w.setPlaceholderText("пусто = без ограничения")
+            w.editingFinished.connect(self.update_plot)
 
-        # Группа фильтрации данных
-        filter_group = QGroupBox("Data Filtering")
-        filter_layout = QVBoxLayout()
+        axis_layout.addWidget(QLabel("X min"), 0, 0)
+        axis_layout.addWidget(self.x_min_input, 0, 1)
+        axis_layout.addWidget(QLabel("X max"), 1, 0)
+        axis_layout.addWidget(self.x_max_input, 1, 1)
+        axis_layout.addWidget(QLabel("Y min"), 2, 0)
+        axis_layout.addWidget(self.y_min_input, 2, 1)
+        axis_layout.addWidget(QLabel("Y max"), 3, 0)
+        axis_layout.addWidget(self.y_max_input, 3, 1)
+        axis_group.setLayout(axis_layout)
+        panel_layout.addWidget(axis_group)
 
-        self.filter_stable = QCheckBox('Show only stable materials (e_above_hull = 0)')
-        self.filter_stable.setChecked(True)
-        filter_layout.addWidget(self.filter_stable)
+        self.preview_btn = QPushButton("Предварительный просмотр")
+        self.preview_btn.setObjectName("primaryButton")
+        self.preview_btn.clicked.connect(self.open_preview)
+        panel_layout.addWidget(self.preview_btn)
 
-        self.filter_metals = QCheckBox('Show only metals (band_gap = 0)')
-        filter_layout.addWidget(self.filter_metals)
+        self.info_label = QLabel("Данные не загружены")
+        self.info_label.setWordWrap(True)
+        panel_layout.addWidget(self.info_label)
+        self.group_legend_label = QLabel("Цвета групп появятся после загрузки данных")
+        self.group_legend_label.setWordWrap(True)
+        self.group_legend_label.setStyleSheet("font-size: 21px; font-weight: 700; color: #1E293B;")
+        panel_layout.addWidget(self.group_legend_label)
+        self.group_legend_widget = QWidget()
+        self.group_legend_layout = QVBoxLayout(self.group_legend_widget)
+        self.group_legend_layout.setContentsMargins(0, 0, 0, 0)
+        self.group_legend_layout.setSpacing(8)
+        panel_layout.addWidget(self.group_legend_widget)
+        panel_layout.addStretch(1)
 
-        self.filter_insulators = QCheckBox('Show only insulators (band_gap > 0)')
-        filter_layout.addWidget(self.filter_insulators)
-
-        filter_group.setLayout(filter_layout)
-        control_layout.addWidget(filter_group)
-
-        # Группа выбора осей
-        axes_group = QGroupBox("Axis Selection")
-        axes_layout = QGridLayout()
-
-        axes_layout.addWidget(QLabel('X Axis:'), 0, 0)
-        self.x_combo = QComboBox()
-        axes_layout.addWidget(self.x_combo, 0, 1)
-
-        axes_layout.addWidget(QLabel('Y Axis:'), 1, 0)
-        self.y_combo = QComboBox()
-        axes_layout.addWidget(self.y_combo, 1, 1)
-
-        axes_group.setLayout(axes_layout)
-        control_layout.addWidget(axes_group)
-
-        # Группа настроек отображения
-        display_group = QGroupBox("Plot Settings")
-        display_layout = QVBoxLayout()
-
-        self.log_x = QCheckBox('Logarithmic X axis')
-        self.log_x.setChecked(True)
-        display_layout.addWidget(self.log_x)
-
-        self.log_y = QCheckBox('Logarithmic Y axis')
-        self.log_y.setChecked(True)
-        display_layout.addWidget(self.log_y)
-
-        self.show_ashby = QCheckBox('Show Ashby regions (for K_VRH vs G_VRH)')
-        self.show_ashby.setChecked(True)
-        display_layout.addWidget(self.show_ashby)
-
-        self.show_indices = QCheckBox('Show performance indices')
-        self.show_indices.setChecked(True)
-        display_layout.addWidget(self.show_indices)
-
-        self.color_by_bandgap = QCheckBox('Color by band gap')
-        self.color_by_bandgap.setChecked(True)
-        display_layout.addWidget(self.color_by_bandgap)
-
-        display_group.setLayout(display_layout)
-        control_layout.addWidget(display_group)
-
-        # Кнопка обновления
-        self.update_btn = QPushButton('Update Plot')
-        self.update_btn.clicked.connect(self.update_plot)
-        self.update_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; }")
-        control_layout.addWidget(self.update_btn)
-
-        # Информация о данных
-        info_group = QGroupBox("Data Info")
-        info_layout = QVBoxLayout()
-
-        self.data_info_label = QLabel('No data loaded')
-        self.data_info_label.setWordWrap(True)
-        info_layout.addWidget(self.data_info_label)
-
-        info_group.setLayout(info_layout)
-        control_layout.addWidget(info_group)
-
-        control_layout.addStretch()
-
-        # Правая панель с графиком
         plot_panel = QWidget()
+        plot_panel.setObjectName("plotPanel")
         plot_layout = QVBoxLayout(plot_panel)
+        plot_layout.setContentsMargins(18, 16, 18, 16)
+        plot_layout.setSpacing(10)
+        zoom_row = QHBoxLayout()
+        self.zoom_in_btn = QPushButton("+")
+        self.zoom_out_btn = QPushButton("-")
+        self.zoom_in_btn.clicked.connect(lambda: self.zoom_plot(0.85))
+        self.zoom_out_btn.clicked.connect(lambda: self.zoom_plot(1.18))
+        zoom_row.addWidget(QLabel("Масштаб:"))
+        zoom_row.addWidget(self.zoom_in_btn)
+        zoom_row.addWidget(self.zoom_out_btn)
+        zoom_row.addStretch(1)
+        plot_layout.addLayout(zoom_row)
+        self.counter_label = QLabel("Подходящих материалов: 0")
+        self.counter_label.setStyleSheet("font-weight: 700; font-size: 22px;")
+        plot_layout.addWidget(self.counter_label, alignment=Qt.AlignHCenter)
 
-        # Создаем фигуру matplotlib
-        self.figure = plt.figure(figsize=(12, 9))
+        history_row = QHBoxLayout()
+        history_row.addStretch(1)
+        self.undo_btn = QPushButton(" Назад")
+        self.undo_btn.setIcon(self._make_arrow_icon("left"))
+        self.undo_btn.setIconSize(QSize(16, 16))
+        self.undo_btn.setToolTip("Отменить последнее действие")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self.undo_action)
+        self.redo_btn = QPushButton("Вперёд ")
+        self.redo_btn.setIcon(self._make_arrow_icon("right"))
+        self.redo_btn.setIconSize(QSize(16, 16))
+        self.redo_btn.setLayoutDirection(Qt.RightToLeft)
+        self.redo_btn.setToolTip("Повторить отменённое действие")
+        self.redo_btn.setEnabled(False)
+        self.redo_btn.clicked.connect(self.redo_action)
+        history_row.addWidget(self.undo_btn)
+        history_row.addWidget(self.redo_btn)
+        history_row.addStretch(1)
+        plot_layout.addLayout(history_row)
+
+        self.figure = plt.figure(facecolor="#F8FAFC")
         self.canvas = FigureCanvas(self.figure)
-        self.toolbar = NavigationToolbar(self.canvas, self)
-
-        plot_layout.addWidget(self.toolbar)
+        self.canvas.setStyleSheet("background: #F8FAFC; border-radius: 12px;")
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.updateGeometry()
         plot_layout.addWidget(self.canvas)
+        plot_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # Добавляем панели в основной layout
-        main_layout.addWidget(control_panel)
+        main_layout.addWidget(panel)
         main_layout.addWidget(plot_panel, stretch=1)
 
-        # Предопределенные области для диаграммы Эшби
-        self.ashby_regions = {
-            "Metals": {
-                "K_range": (50e9, 250e9),  # GPa
-                "G_range": (20e9, 150e9),  # GPa
-                "color": "#8e7cc3",
-                "alpha": 0.3
-            },
-            "Polymers": {
-                "K_range": (1e9, 5e9),
-                "G_range": (0.1e9, 2e9),
-                "color": "#ff6b6b",
-                "alpha": 0.3
-            },
-            "Ceramics": {
-                "K_range": (100e9, 400e9),
-                "G_range": (50e9, 200e9),
-                "color": "#f4c542",
-                "alpha": 0.3
-            }
-        }
+        self.canvas.mpl_connect("button_press_event", self.on_press)
+        self.canvas.mpl_connect("button_release_event", self.on_release)
+        self.canvas.mpl_connect("motion_notify_event", self.on_motion)
+        self.canvas.mpl_connect("scroll_event", self.on_scroll)
 
-    def load_csv(self):
-        """Загрузка CSV файла"""
-        file_name, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open CSV File",
-            "",
-            "CSV Files (*.csv);;All Files (*)"
+    def apply_modern_theme(self):
+        self.setStyleSheet(
+            """
+            QWidget {
+                background-color: #F3F6FB;
+                color: #1F2937;
+                font-size: 16px;
+                font-family: "Segoe UI", "Inter", "Roboto", sans-serif;
+            }
+            #controlPanel, #plotPanel {
+                background: #FFFFFF;
+                border: 1px solid #E5EAF2;
+                border-radius: 14px;
+            }
+            QGroupBox {
+                font-size: 21px;
+                font-weight: 700;
+                border: 1px solid #E5EAF2;
+                border-radius: 10px;
+                margin-top: 10px;
+                padding: 14px 12px 12px 12px;
+                background: #FCFDFF;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+                color: #334155;
+            }
+            QLineEdit, QComboBox {
+                border: 1px solid #D6DCE8;
+                border-radius: 8px;
+                padding: 10px 12px;
+                background: #FFFFFF;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #4C6EF5;
+            }
+            QPushButton {
+                border: 1px solid #D6DCE8;
+                border-radius: 8px;
+                padding: 11px 14px;
+                background: #FFFFFF;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #F1F5FF;
+            }
+            QPushButton:pressed {
+                background: #E4ECFF;
+            }
+            QPushButton#primaryButton {
+                background: #3B5BDB;
+                border-color: #3B5BDB;
+                color: #FFFFFF;
+            }
+            QPushButton#primaryButton:hover {
+                background: #2F4FCB;
+            }
+            QLabel {
+                background: transparent;
+            }
+            #controlPanel QLabel,
+            #controlPanel QGroupBox,
+            #controlPanel QComboBox,
+            #controlPanel QLineEdit,
+            #controlPanel QPushButton {
+                font-size: 21px;
+            }
+            #controlPanel QGroupBox::title {
+                font-size: 22px;
+            }
+            #controlPanel QFormLayout QLabel {
+                font-size: 20px;
+            }
+            """
         )
 
-        if file_name:
-            try:
-                # Пробуем разные кодировки
-                encodings = ['utf-8', 'cp1251', 'latin1', 'iso-8859-1']
-                self.df = None
+    @staticmethod
+    def _make_arrow_icon(direction, color="#334155", size=28):
+        """Draws a small filled chevron (left/right) into a QIcon at runtime, instead
+        of relying on plain text arrow glyphs (e.g. "<"/">"), for a crisper, resolution
+        -independent icon with no external asset files."""
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(color))
+        w, h = size, size
+        if direction == "left":
+            points = [QPointF(w * 0.68, h * 0.14), QPointF(w * 0.28, h * 0.5), QPointF(w * 0.68, h * 0.86)]
+        else:
+            points = [QPointF(w * 0.32, h * 0.14), QPointF(w * 0.72, h * 0.5), QPointF(w * 0.32, h * 0.86)]
+        painter.drawPolygon(QPolygonF(points))
+        painter.end()
+        return QIcon(pixmap)
 
-                for encoding in encodings:
-                    try:
-                        self.df = pd.read_csv(file_name, encoding=encoding)
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                    except Exception as e:
-                        print(f"Error with encoding {encoding}: {e}")
-                        continue
+    @staticmethod
+    def lighten_color(hex_color, factor=0.65):
+        hex_color = hex_color.lstrip("#")
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        r = int(r + (255 - r) * factor)
+        g = int(g + (255 - g) * factor)
+        b = int(b + (255 - b) * factor)
+        return f"#{r:02X}{g:02X}{b:02X}"
 
-                if self.df is None:
-                    # Последняя попытка с автоопределением
-                    self.df = pd.read_csv(file_name, encoding=None)
+    def load_default_data(self):
+        try:
+            groups = pd.read_csv(self.default_paths["groups"], encoding="utf-8-sig")
+            subgroups = pd.read_csv(self.default_paths["subgroups"], encoding="utf-8-sig")
+            materials = pd.read_csv(self.default_paths["materials"], encoding="utf-8-sig")
 
-                self.file_label.setText(f'Loaded: {file_name.split("/")[-1]}')
+            groups.columns = groups.columns.str.strip()
+            subgroups.columns = subgroups.columns.str.strip()
+            materials.columns = materials.columns.str.strip()
 
-                # Очищаем названия колонок от лишних пробелов
-                self.df.columns = self.df.columns.str.strip()
+            for frame, col in [(groups, "group_id"), (subgroups, "subgroup_id"), (subgroups, "group_id"), (materials, "subgroup_id")]:
+                frame[col] = pd.to_numeric(frame[col], errors="coerce").astype("Int64")
 
-                # Конвертируем все возможные колонки в числовой формат
-                for col in self.df.columns:
-                    try:
-                        self.df[col] = pd.to_numeric(self.df[col], errors='ignore')
-                    except:
-                        pass
+            self.groups_df = groups.sort_values("group_id").reset_index(drop=True)
+            merged = materials.merge(subgroups, on="subgroup_id", how="inner", validate="many_to_one")
+            merged = merged.merge(groups, on="group_id", how="inner", validate="many_to_one")
 
-                # Обновляем комбобоксы
-                self.update_column_combo()
+            if merged["group_id"].isna().any() or merged["group_name"].isna().any():
+                raise ValueError("Обнаружены материалы без группы после связывания таблиц.")
 
-                # Показываем информацию о данных
-                self.update_data_info()
+            found_groups = set(merged["group_id"].dropna().astype(int).unique().tolist())
+            expected_groups = set(self.groups_df["group_id"].dropna().astype(int).tolist())
+            if found_groups != expected_groups:
+                missing = sorted(expected_groups - found_groups)
+                raise ValueError(f"В диаграмме отсутствуют обязательные группы: {missing}")
 
-                # Автоматически строим график
+            self.groups_df["group_name"] = self.translator.translate_series(self.groups_df["group_name"])
+            for col in ["group_name", "subgroup_name", "material_name"]:
+                if col in merged.columns:
+                    merged[col] = self.translator.translate_series(merged[col])
+
+            self.df = merged.reset_index(drop=True)
+            self.info_label.setText(f"Загружено материалов: {len(self.df)}")
+            self.update_group_legend()
+            self.clear_plot_placeholder("Выберите критерий, чтобы построить диаграмму")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить данные:\n{e}")
+
+    def update_group_legend(self):
+        if self.groups_df is None or self.groups_df.empty:
+            self.group_legend_label.setText("Цвета групп недоступны")
+            return
+        self.group_legend_label.setText("Цвета групп:")
+        while self.group_legend_layout.count():
+            item = self.group_legend_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for i, row in enumerate(self.groups_df.itertuples(index=False)):
+            color = self.group_colors[i % len(self.group_colors)]
+            chip = QLabel(f"<span style='color:{color}; font-size:24px;'>●</span>  {row.group_name}")
+            chip.setStyleSheet(
+                "background: #F8FAFF; border: 1px solid #D8E1F2; border-radius: 10px; "
+                "padding: 12px 14px; color: #1E293B; font-size: 21px; font-weight: 600;"
+            )
+            self.group_legend_layout.addWidget(chip)
+
+    def clear_plot_placeholder(self, message):
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor("#F8FAFC")
+        ax.axis("off")
+        ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12, color="#666666", transform=ax.transAxes)
+        self.counter_label.setText("Подходящих материалов: 0")
+        self.last_suitable_df = pd.DataFrame()
+        self.canvas.draw_idle()
+
+    def current_condition_config(self):
+        idx = self.condition_combo.currentIndex()
+        if idx == 1:
+            return {"y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
+        if idx == 2:
+            return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "to_b": lambda v: np.log10(v), "from_b": lambda b: 10 ** b}
+        if idx == 3:
+            return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
+        if idx == 4:
+            return {"y_col": "Youngs_Modulus_GPa", "m": 3.0, "label": "E^(1/3)/ρ", "to_b": lambda v: 3 * np.log10(v), "from_b": lambda b: 10 ** (b / 3)}
+        if idx == 5:
+            return {"y_col": "Strength_MPa", "m": 1.5, "label": "σ^(2/3)/ρ", "to_b": lambda v: 1.5 * np.log10(v), "from_b": lambda b: 10 ** (b / 1.5)}
+        if idx == 6:
+            # Same merit index (and slope) as √E/ρ above -- E^(1/2)/ρ is the standard
+            # Ashby merit index for both light stiff beams in bending and light stiff
+            # columns in buckling, so the two entries share m/to_b/from_b by design.
+            return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "E^(1/2)/ρ", "to_b": lambda v: 2 * np.log10(v), "from_b": lambda b: 10 ** (b / 2)}
+        return None
+
+    def filtered_ratio_values(self):
+        """Index values (E/rho, sigma/rho, E^(1/3)/rho, ...) for the current criterion,
+        computed directly from density and the criterion's y-column via its own
+        log-log formula -- not read from precomputed CSV columns, which don't exist
+        for every criterion and (checked against the dataset) don't reliably agree
+        with the actual line formula anyway. Restricted to materials that satisfy the
+        current axis-range filters, so both the valid input range and the "auto"
+        median stay in sync with those filters and with the line's own equation."""
+        cfg = self.current_condition_config()
+        if cfg is None or self.df is None:
+            return None
+        x = pd.to_numeric(self.df["Density_kg_m3"], errors="coerce")
+        y = pd.to_numeric(self.df[cfg["y_col"]], errors="coerce")
+        valid = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
+        xmin = self.parse_optional_float(self.x_min_input)
+        xmax = self.parse_optional_float(self.x_max_input)
+        ymin = self.parse_optional_float(self.y_min_input)
+        ymax = self.parse_optional_float(self.y_max_input)
+        if xmin is not None:
+            valid &= x >= xmin
+        if xmax is not None:
+            valid &= x <= xmax
+        if ymin is not None:
+            valid &= y >= ymin
+        if ymax is not None:
+            valid &= y <= ymax
+        if not valid.any():
+            return None
+        lx = np.log10(x[valid])
+        ly = np.log10(y[valid])
+        ratios = cfg["from_b"](ly - cfg["m"] * lx)
+        ratios = ratios[np.isfinite(ratios) & (ratios > 0)]
+        return ratios if len(ratios) else None
+
+    def index_value_range(self):
+        ratios = self.filtered_ratio_values()
+        if ratios is None:
+            return None
+        return float(ratios.min()), float(ratios.max())
+
+    def resolve_condition_intercept(self, cfg):
+        """The working log-space intercept: from the manual override if the user has
+        fixed one, otherwise the median of the current, filter-adjusted data -- "auto"
+        mode, recomputed every redraw so it tracks criteria/filter changes live."""
+        if self.index_manual_value is not None:
+            return cfg["to_b"](self.index_manual_value)
+        ratios = self.filtered_ratio_values()
+        if ratios is not None:
+            return float(cfg["to_b"](float(ratios.median())))
+        return 0.0
+
+    def refresh_index_value_controls(self):
+        """Sync the field/Reset button/validator range/tooltip to the current criterion,
+        filters and auto/manual state. Called on every redraw so it never goes stale."""
+        no_range_tooltip = "Нет данных для расчёта диапазона"
+        cfg = self.current_condition_config()
+        if cfg is None:
+            self.index_value_input.setEnabled(False)
+            self.index_reset_btn.setEnabled(False)
+            self.index_value_input.setPlaceholderText("выберите критерий")
+            self.index_value_input.setToolTip(no_range_tooltip)
+            if not self.index_value_input.hasFocus():
+                self.index_value_input.clear()
+            return
+        rng = self.index_value_range()
+        self.index_value_input.setEnabled(rng is not None)
+        self.index_reset_btn.setEnabled(rng is not None and self.index_manual_value is not None)
+        if rng is not None:
+            lo, hi = rng
+            self.index_value_validator.setRange(lo, hi, 6)
+            self.index_value_input.setPlaceholderText("Авто (вычисляется по данным)")
+            self.index_value_input.setToolTip(f"Допустимый диапазон: {lo:.4g} — {hi:.4g}")
+        else:
+            self.index_value_input.setPlaceholderText("нет данных")
+            self.index_value_input.setToolTip(no_range_tooltip)
+        if not self.index_value_input.hasFocus():
+            if self.index_manual_value is not None:
+                self.index_value_input.setText(f"{self.index_manual_value:.6g}")
+            else:
+                self.index_value_input.clear()
+
+    def on_condition_changed(self):
+        self.index_manual_value = None
+        self.update_plot()
+
+    def on_index_reset(self):
+        self.index_manual_value = None
+        self.update_plot()
+
+    def on_index_value_edited(self):
+        cfg = self.current_condition_config()
+        if cfg is None:
+            return
+        text = self.index_value_input.text().strip().replace(",", ".")
+        if not text:
+            self.index_manual_value = None
+            self.update_plot()
+            return
+        try:
+            value = float(text)
+        except ValueError:
+            self.update_plot()
+            return
+        if value <= 0:
+            QMessageBox.warning(self, "Некорректное значение", "Значение индекса должно быть положительным числом.")
+            self.update_plot()
+            return
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            if value < lo or value > hi:
+                QMessageBox.warning(
+                    self,
+                    "Значение вне диапазона",
+                    f"Допустимый диапазон для текущего критерия: {lo:.4g} – {hi:.4g}.\n"
+                    "Введённое значение не применено.",
+                )
                 self.update_plot()
+                return
+        self.index_manual_value = value
+        self.update_plot()
 
-                QMessageBox.information(self, "Success",
-                                        f"File loaded successfully!\n"
-                                        f"Rows: {len(self.df)}\n"
-                                        f"Columns: {len(self.df.columns)}")
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load file:\n{str(e)}")
-
-    def update_column_combo(self):
-        """Обновление списков колонок"""
-        if self.df is not None:
-            # Получаем только числовые колонки
-            numeric_columns = []
-            for col in self.df.columns:
-                try:
-                    # Проверяем, можно ли конвертировать в числа
-                    pd.to_numeric(self.df[col].iloc[0] if len(self.df) > 0 else 0)
-                    numeric_columns.append(col)
-                except:
-                    # Если не получается, пропускаем
-                    pass
-
-            # Если не нашли числовых колонок, показываем все
-            if not numeric_columns:
-                numeric_columns = list(self.df.columns)
-
-            self.x_combo.clear()
-            self.y_combo.clear()
-            self.x_combo.addItems(numeric_columns)
-            self.y_combo.addItems(numeric_columns)
-
-            # Устанавливаем разумные значения по умолчанию
-            preferred_x = ['elasticity.K_VRH', 'K_VRH', 'bulk_modulus', 'volume', 'density']
-            preferred_y = ['elasticity.G_VRH', 'G_VRH', 'shear_modulus', 'band_gap', 'energy_per_atom']
-
-            for pref in preferred_x:
-                if pref in numeric_columns:
-                    self.x_combo.setCurrentText(pref)
-                    break
-
-            for pref in preferred_y:
-                if pref in numeric_columns:
-                    self.y_combo.setCurrentText(pref)
-                    break
-
-    def update_data_info(self):
-        """Обновление информации о данных"""
-        if self.df is not None:
-            info_text = f"Total materials: {len(self.df)}\n"
-            info_text += f"Total columns: {len(self.df.columns)}\n"
-
-            # Статистика по стабильности
-            if 'e_above_hull' in self.df.columns:
-                try:
-                    e_above = pd.to_numeric(self.df['e_above_hull'], errors='coerce')
-                    stable = (e_above == 0).sum()
-                    info_text += f"Stable materials (e_above_hull=0): {stable}\n"
-                except:
-                    pass
-
-            # Статистика по band_gap
-            if 'band_gap' in self.df.columns:
-                try:
-                    band_gap = pd.to_numeric(self.df['band_gap'], errors='coerce')
-                    metals = (band_gap == 0).sum()
-                    insulators = (band_gap > 0).sum()
-                    info_text += f"Metals (band_gap=0): {metals}\n"
-                    info_text += f"Insulators (band_gap>0): {insulators}\n"
-                except:
-                    pass
-
-            self.data_info_label.setText(info_text)
-
-    def filter_data(self):
-        """Фильтрация данных по выбранным критериям"""
-        if self.df is None:
+    @staticmethod
+    def parse_optional_float(widget: QLineEdit):
+        text = widget.text().strip().replace(",", ".")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
             return None
 
-        filtered_df = self.df.copy()
+    def validate_axis_bounds(self):
+        xmin = self.parse_optional_float(self.x_min_input)
+        xmax = self.parse_optional_float(self.x_max_input)
+        ymin = self.parse_optional_float(self.y_min_input)
+        ymax = self.parse_optional_float(self.y_max_input)
 
-        # Фильтр по стабильности
-        if self.filter_stable.isChecked() and 'e_above_hull' in filtered_df.columns:
-            try:
-                e_above = pd.to_numeric(filtered_df['e_above_hull'], errors='coerce')
-                filtered_df = filtered_df[e_above == 0]
-            except:
-                pass
+        errors = []
+        if xmin is not None and xmax is not None and xmin > xmax:
+            errors.append("X min не может быть больше X max.")
+        if ymin is not None and ymax is not None and ymin > ymax:
+            errors.append("Y min не может быть больше Y max.")
 
-        # Фильтр по металлам
-        if self.filter_metals.isChecked() and 'band_gap' in filtered_df.columns:
-            try:
-                band_gap = pd.to_numeric(filtered_df['band_gap'], errors='coerce')
-                filtered_df = filtered_df[band_gap == 0]
-            except:
-                pass
+        if errors:
+            if not self.invalid_bounds_notified:
+                QMessageBox.warning(self, "Некорректные границы осей", "\n".join(errors))
+                self.invalid_bounds_notified = True
+            return None
 
-        # Фильтр по изоляторам
-        if self.filter_insulators.isChecked() and 'band_gap' in filtered_df.columns:
-            try:
-                band_gap = pd.to_numeric(filtered_df['band_gap'], errors='coerce')
-                filtered_df = filtered_df[band_gap > 0]
-            except:
-                pass
+        self.invalid_bounds_notified = False
+        return xmin, xmax, ymin, ymax
 
-        return filtered_df
+    def build_mask(self, df, x_col, y_col):
+        x = pd.to_numeric(df[x_col], errors="coerce")
+        y = pd.to_numeric(df[y_col], errors="coerce")
+        mask = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
 
-    def add_ashby_regions(self, ax):
-        """Добавление областей Эшби для модулей упругости"""
-        # Конвертируем в GPa для удобства отображения
-        for material_class, props in self.ashby_regions.items():
-            K_min, K_max = props["K_range"]
-            G_min, G_max = props["G_range"]
+        cfg = self.current_condition_config()
+        lx = np.log10(x[mask])
+        ly = np.log10(y[mask])
 
-            # Создаем прямоугольную область
-            rect = plt.Rectangle(
-                (K_min, G_min),
-                K_max - K_min,
-                G_max - G_min,
-                facecolor=props["color"],
-                edgecolor="black",
-                alpha=props["alpha"],
-                linewidth=1.5,
-                label=material_class
-            )
-            ax.add_patch(rect)
+        if cfg is not None:
+            self.condition_intercept = self.resolve_condition_intercept(cfg)
+            line_vals = cfg["m"] * lx + self.condition_intercept
+            high_side = self.preference_combo.currentIndex() == 0
+            if high_side:
+                cond_mask = ly >= line_vals
+            else:
+                cond_mask = ly <= line_vals
+        else:
+            cond_mask = pd.Series(True, index=lx.index)
 
-            # Добавляем текст
-            ax.text(
-                (K_min + K_max) / 2,
-                (G_min + G_max) / 2,
-                material_class,
-                ha="center",
-                va="center",
-                fontsize=10,
-                weight="bold",
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7)
-            )
+        final_mask = pd.Series(False, index=df.index)
+        final_mask.loc[mask.index[mask]] = cond_mask.values
+
+        xmin = self.parse_optional_float(self.x_min_input)
+        xmax = self.parse_optional_float(self.x_max_input)
+        ymin = self.parse_optional_float(self.y_min_input)
+        ymax = self.parse_optional_float(self.y_max_input)
+
+        if xmin is not None:
+            final_mask &= x >= xmin
+        if xmax is not None:
+            final_mask &= x <= xmax
+        if ymin is not None:
+            final_mask &= y >= ymin
+        if ymax is not None:
+            final_mask &= y <= ymax
+
+        return x, y, final_mask, mask
+
+    def rounded_geometry_from_log_points(self, points_log, padding=0.0):
+        if len(points_log) == 0:
+            return None
+
+        smooth_radius = 0.02
+        if len(points_log) == 1:
+            geom = Point(points_log[0])
+            radius = 0.055
+            rounded = geom.buffer(radius + padding, join_style=1)
+        elif len(points_log) == 2:
+            geom = LineString(points_log)
+            seg = np.linalg.norm(np.array(points_log[0]) - np.array(points_log[1]))
+            radius = max(seg * 0.24, 0.045)
+            rounded = geom.buffer(radius + padding, cap_style=1, join_style=1)
+        else:
+            hull = MultiPoint(points_log).convex_hull
+            if not isinstance(hull, Polygon):
+                return None
+            minx, miny, maxx, maxy = hull.bounds
+            radius = max((maxx - minx), (maxy - miny)) * 0.2
+            radius = max(radius, 0.035)
+            rounded = hull.buffer(radius + padding, join_style=1).buffer(-radius, join_style=1)
+            smooth_radius = radius * 0.35
+
+        if rounded.is_empty:
+            return None
+        rounded = rounded.buffer(smooth_radius, join_style=1).buffer(-smooth_radius, join_style=1)
+        if rounded.is_empty:
+            return None
+        if rounded.geom_type == "MultiPolygon":
+            rounded = max(rounded.geoms, key=lambda g: g.area)
+        return rounded
+
+    def rounded_patch_from_log_points(self, points_log, color, alpha, lw=1.2, zorder=2):
+        rounded = self.rounded_geometry_from_log_points(points_log)
+        if rounded is None:
+            return None
+        return self.geometry_to_patch(rounded, color=color, alpha=alpha, lw=lw, zorder=zorder)
+
+    def geometry_to_patch(self, geom, color, alpha, lw=1.2, zorder=2):
+        if geom is None or geom.is_empty:
+            return None
+        if geom.geom_type == "MultiPolygon":
+            geom = max(geom.geoms, key=lambda g: g.area)
+        if geom.geom_type != "Polygon":
+            return None
+        minx, miny, maxx, maxy = geom.bounds
+        rounding = max(maxx - minx, maxy - miny) * 0.03
+        if rounding > 0:
+            geom = geom.buffer(rounding, join_style=1).buffer(-rounding, join_style=1)
+            if geom.is_empty:
+                return None
+            if geom.geom_type == "MultiPolygon":
+                geom = max(geom.geoms, key=lambda g: g.area)
+        coords = np.array(geom.exterior.coords)
+        coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
+        return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor=color, alpha=alpha, linewidth=lw, zorder=zorder)
+
+    def material_patch(self, x, y, color="#1f77b4"):
+        logx, logy = np.log10(x), np.log10(y)
+        r = 0.018
+        angles = np.linspace(0, 2 * np.pi, 7)[:-1]
+        points = [(logx + r * np.cos(a), logy + r * np.sin(a)) for a in angles]
+        poly = Polygon(points)
+        rounded = poly.buffer(r * 0.55, join_style=1).buffer(-r * 0.55, join_style=1)
+        coords = np.array(rounded.exterior.coords)
+        coords_lin = np.column_stack((10 ** coords[:, 0], 10 ** coords[:, 1]))
+        return MplPolygon(coords_lin, closed=True, facecolor=color, edgecolor="white", alpha=0.85, linewidth=0.5, zorder=4)
+
+    def _snapshot_state(self):
+        return AshbyState(
+            condition_index=self.condition_combo.currentIndex(),
+            preference_index=self.preference_combo.currentIndex(),
+            index_manual_value=self.index_manual_value,
+            x_min=self.x_min_input.text(),
+            x_max=self.x_max_input.text(),
+            y_min=self.y_min_input.text(),
+            y_max=self.y_max_input.text(),
+        )
+
+    def _apply_state(self, state):
+        self._restoring_state = True
+        try:
+            self.condition_combo.setCurrentIndex(state.condition_index)
+            self.preference_combo.setCurrentIndex(state.preference_index)
+            self.x_min_input.setText(state.x_min)
+            self.x_max_input.setText(state.x_max)
+            self.y_min_input.setText(state.y_min)
+            self.y_max_input.setText(state.y_max)
+            self.index_manual_value = state.index_manual_value
+            self.update_plot()
+        finally:
+            self._restoring_state = False
+
+    def _maybe_record_state(self):
+        """Called at the end of every successful update_plot() -- the common funnel for
+        criterion changes, preference changes, axis-boundary edits, index input/reset and
+        line drags. Pushes the *previous* current state onto the undo stack whenever the
+        state actually changed, and clears the redo stack (a new change invalidates any
+        previously-undone "future"). Skipped while restoring a state ourselves so
+        undo/redo clicks don't record themselves as new history."""
+        if self._restoring_state:
+            return
+        new_state = self._snapshot_state()
+        if self.current_state is not None and new_state != self.current_state:
+            self.undo_stack.append(self.current_state)
+            if len(self.undo_stack) > self.MAX_HISTORY:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+        self.current_state = new_state
+        self._update_undo_redo_buttons()
+
+    def _update_undo_redo_buttons(self):
+        self.undo_btn.setEnabled(bool(self.undo_stack))
+        self.redo_btn.setEnabled(bool(self.redo_stack))
+
+    def undo_action(self):
+        if not self.undo_stack or self.current_state is None:
+            return
+        prev_state = self.undo_stack.pop()
+        self.redo_stack.append(self.current_state)
+        if len(self.redo_stack) > self.MAX_HISTORY:
+            self.redo_stack.pop(0)
+        self.current_state = prev_state
+        self._apply_state(prev_state)
+        self._update_undo_redo_buttons()
+
+    def redo_action(self):
+        if not self.redo_stack or self.current_state is None:
+            return
+        next_state = self.redo_stack.pop()
+        self.undo_stack.append(self.current_state)
+        if len(self.undo_stack) > self.MAX_HISTORY:
+            self.undo_stack.pop(0)
+        self.current_state = next_state
+        self._apply_state(next_state)
+        self._update_undo_redo_buttons()
 
     def update_plot(self):
-        """Обновление графика"""
         if self.df is None:
-            QMessageBox.warning(self, "Warning", "Please load a CSV file first.")
+            return
+        limits = self.validate_axis_bounds()
+        if limits is None:
             return
 
-        x_col = self.x_combo.currentText()
-        y_col = self.y_combo.currentText()
+        x_col = "Density_kg_m3"
+        cfg = self.current_condition_config()
+        y_col = cfg["y_col"] if cfg is not None else "Youngs_Modulus_GPa"
 
-        if not x_col or not y_col:
-            QMessageBox.warning(self, "Warning", "Please select both X and Y axes.")
+        x, y, suitable_mask, valid_mask = self.build_mask(self.df, x_col, y_col)
+        valid_df = self.df[valid_mask]
+
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor("#F8FAFC")
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        self.material_artists = []
+        self.material_points = []
+        self.hover_annotation = None
+        self._drag_group_cache = {}
+        self._drag_subgroup_cache = {}
+        self._drag_material_cache = []
+
+        x_vals = pd.to_numeric(valid_df[x_col], errors="coerce")
+        y_vals = pd.to_numeric(valid_df[y_col], errors="coerce")
+        x_vals = x_vals[(x_vals > 0) & np.isfinite(x_vals)]
+        y_vals = y_vals[(y_vals > 0) & np.isfinite(y_vals)]
+        x_lo, x_hi = float(x_vals.min()), float(x_vals.max())
+        y_lo, y_hi = float(y_vals.min()), float(y_vals.max())
+        x_margin = 10 ** 0.16
+        y_margin = 10 ** 0.16
+        x_lim = (x_lo / x_margin, x_hi * x_margin)
+        y_lim = (y_lo / y_margin, y_hi * y_margin)
+        label_points = []
+        group_bounds = []
+
+        group_color_by_id = {}
+        group_geom_by_id = {}
+        group_patch_by_id = {}
+        subgroup_color_by_name = {}
+
+        group_rows = self.groups_df.itertuples(index=False) if self.groups_df is not None else []
+        for i, group_row in enumerate(group_rows):
+            gname = group_row.group_name
+            gid = group_row.group_id
+            group_color_by_id[gid] = self.group_colors[i % len(self.group_colors)]
+            gdf = valid_df[valid_df["group_id"] == gid]
+            if gdf.empty:
+                continue
+            group_ok = bool(suitable_mask.loc[gdf.index].any())
+            group_alpha = 0.23 if group_ok else 0.08
+            pts = np.column_stack((np.log10(pd.to_numeric(gdf[x_col])), np.log10(pd.to_numeric(gdf[y_col]))))
+            ggeom = self.rounded_geometry_from_log_points(pts, padding=0.028)
+            group_geom_by_id[gid] = ggeom
+            patch = self.geometry_to_patch(ggeom, color=group_color_by_id[gid], alpha=group_alpha, lw=2.0 if group_ok else 1.0, zorder=0.5)
+            if patch is not None:
+                ax.add_patch(patch)
+                group_patch_by_id[gid] = patch
+                self._drag_group_cache[gid] = (patch, gdf.index)
+                verts = patch.get_xy()
+                group_bounds.append((verts[:, 0].min(), verts[:, 0].max(), verts[:, 1].min(), verts[:, 1].max()))
+
+        for sname, sdf in valid_df.groupby("subgroup_name", dropna=False):
+            sub_ok = bool(suitable_mask.loc[sdf.index].any())
+            sub_alpha = 0.2 if sub_ok else 0.06
+            pts = np.column_stack((np.log10(pd.to_numeric(sdf[x_col])), np.log10(pd.to_numeric(sdf[y_col]))))
+            subgroup_group_id = sdf["group_id"].iloc[0] if len(sdf) else None
+            base_group_color = group_color_by_id.get(subgroup_group_id, "#3B5BDB")
+            subgroup_color = self.lighten_color(base_group_color, factor=0.68)
+            subgroup_color_by_name[sname] = subgroup_color
+            sgeom = self.rounded_geometry_from_log_points(pts)
+            ggeom = group_geom_by_id.get(subgroup_group_id)
+            if sgeom is not None and ggeom is not None:
+                sgeom = sgeom.intersection(ggeom)
+            spatch = self.geometry_to_patch(sgeom, color=subgroup_color, alpha=sub_alpha, lw=1.5 if sub_ok else 0.8, zorder=1.2)
+            if spatch is not None:
+                ax.add_patch(spatch)
+                self._drag_subgroup_cache[sname] = (spatch, sdf.index)
+
+        for idx, row in valid_df.iterrows():
+            is_ok = bool(suitable_mask.loc[idx])
+            subgroup_name = row.get("subgroup_name", "")
+            color = "#000000"
+            patch = self.material_patch(float(row[x_col]), float(row[y_col]), color=color)
+            group_patch = group_patch_by_id.get(row.get("group_id"))
+            if group_patch is not None:
+                patch.set_clip_path(group_patch)
+            patch.set_alpha(0.9 if is_ok else 0.2)
+            ax.add_patch(patch)
+            material_name = str(row.get("material_name", "Material"))
+            tip_text = f"{material_name}\nПодгруппа: {subgroup_name}"
+            self.material_artists.append((patch, tip_text))
+            self.material_points.append((float(row[x_col]), float(row[y_col]), tip_text))
+            self._drag_material_cache.append((patch, idx))
+
+        if group_bounds:
+            gx0 = min(b[0] for b in group_bounds)
+            gx1 = max(b[1] for b in group_bounds)
+            gy0 = min(b[2] for b in group_bounds)
+            gy1 = max(b[3] for b in group_bounds)
+            x_lim = (min(x_lim[0], gx0 / (10 ** 0.06)), max(x_lim[1], gx1 * (10 ** 0.06)))
+            y_lim = (min(y_lim[0], gy0 / (10 ** 0.06)), max(y_lim[1], gy1 * (10 ** 0.06)))
+
+        if cfg is not None:
+            xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
+            yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
+            self.line_artist = ax.plot(xx, yy, color="#E03131", linewidth=2.6, label=f"Условие {cfg['label']}")[0]
+        else:
+            self.line_artist = None
+
+        xmin, xmax, ymin, ymax = limits
+        if xmin is not None:
+            ax.axvline(xmin, color="#4CAF50", linestyle="--", linewidth=1.3)
+            ax.text(xmin, 0.98, f"X min = {xmin:g}", transform=ax.get_xaxis_transform(), color="#2E7D32", fontsize=9, ha="left", va="top")
+        if xmax is not None:
+            ax.axvline(xmax, color="#4CAF50", linestyle="--", linewidth=1.3)
+            ax.text(xmax, 0.92, f"X max = {xmax:g}", transform=ax.get_xaxis_transform(), color="#2E7D32", fontsize=9, ha="left", va="top")
+        if ymin is not None:
+            ax.axhline(ymin, color="#7E57C2", linestyle="--", linewidth=1.3)
+            ax.text(0.01, ymin, f"Y min = {ymin:g}", transform=ax.get_yaxis_transform(), color="#5E35B1", fontsize=9, ha="left", va="bottom")
+        if ymax is not None:
+            ax.axhline(ymax, color="#7E57C2", linestyle="--", linewidth=1.3)
+            ax.text(0.01, ymax, f"Y max = {ymax:g}", transform=ax.get_yaxis_transform(), color="#5E35B1", fontsize=9, ha="left", va="top")
+
+        if any(v is not None for v in [xmin, xmax, ymin, ymax]):
+            xlo = xmin if xmin is not None else x[valid_mask].min()
+            xhi = xmax if xmax is not None else x[valid_mask].max()
+            ylo = ymin if ymin is not None else y[valid_mask].min()
+            yhi = ymax if ymax is not None else y[valid_mask].max()
+            ax.fill_between([xlo, xhi], ylo, yhi, color="#00BCD4", alpha=0.08, zorder=0)
+
+        suitable_df = self.df[suitable_mask].copy()
+        self._update_status_labels(suitable_df, cfg)
+
+        ax.set_xlim(*x_lim)
+        ax.set_ylim(*y_lim)
+        ax.set_xlabel("ρ — Плотность (кг/м³)", fontsize=11, color="#334155")
+        if y_col == "Youngs_Modulus_GPa":
+            ax.set_ylabel("E — Модуль Юнга (ГПа)", fontsize=11, color="#334155")
+        elif y_col == "Strength_MPa":
+            ax.set_ylabel("σ — Прочность (МПа)", fontsize=11, color="#334155")
+        else:
+            ax.set_ylabel("Свойство материала", fontsize=11, color="#334155")
+        ax.set_title("Диаграмма Эшби (логарифмический масштаб)", fontsize=18, pad=16, color="#0F172A", weight="bold")
+        ax.tick_params(axis="both", which="major", labelsize=10, colors="#475569")
+        ax.tick_params(axis="both", which="minor", labelsize=8, colors="#94A3B8")
+        for spine in ax.spines.values():
+            spine.set_color("#CBD5E1")
+        ax.grid(True, which="major", linestyle="-", linewidth=0.8, alpha=0.38, color="#CBD5E1")
+        ax.grid(True, which="minor", linestyle="--", linewidth=0.55, alpha=0.22, color="#DCE3EE")
+        if self.line_artist is not None:
+            ax.legend(loc="lower left")
+        self.figure.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.1)
+        self._drag_ax = ax
+        self._drag_cfg = cfg
+        self._drag_x_col = x_col
+        self._drag_y_col = y_col
+        self.canvas.draw_idle()
+        self._maybe_record_state()
+
+    def _apply_line_value(self, y_data, x_reference):
+        """Pure calc: resolve a dragged y position into the (clamped) index value and
+        the matching log-space intercept, without touching the plot. Returns False if
+        the position can't be resolved (e.g. the mouse left the valid log-scale area)."""
+        if y_data is None or y_data <= 0 or x_reference <= 0:
+            return False
+        cfg = self.current_condition_config()
+        if cfg is None:
+            return False
+        intercept = np.log10(y_data) - cfg["m"] * np.log10(x_reference)
+        value = cfg["from_b"](intercept)
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            value = max(lo, min(hi, value))
+        self.index_manual_value = value
+        self.condition_intercept = cfg["to_b"](value)
+        return True
+
+    def update_line_from_y(self, y_data, x_reference):
+        if self._apply_line_value(y_data, x_reference):
+            self.update_plot()
+
+    def _schedule_drag_frame(self):
+        """requestAnimationFrame-style coalescing: at most one redraw per ~16ms frame,
+        always using the latest pending mouse position so a slow frame never leaves the
+        line lagging behind and only catching up on mouse release."""
+        if not self._drag_timer.isActive():
+            self._drag_timer.start(16)
+
+    def _process_drag_frame(self):
+        if self._pending_drag_position is None:
+            return
+        y_data, x_reference = self._pending_drag_position
+        self._pending_drag_position = None
+        if self._apply_line_value(y_data, x_reference):
+            self._refresh_line_fast()
+
+    def _update_status_labels(self, suitable_df, cfg):
+        self.last_suitable_df = suitable_df
+        self.counter_label.setText(f"Подходящих материалов: {len(suitable_df)}")
+
+        if cfg is not None and self.condition_intercept is not None:
+            line_val = cfg["from_b"](self.condition_intercept)
+            mode_suffix = " (авто)" if self.index_manual_value is None else ""
+            line_info = f"Линия {cfg['label']} = {line_val:.4g}{mode_suffix}"
+            if self.line_artist is not None:
+                self.line_artist.set_label(f"Условие {cfg['label']} = {line_val:.4g}{mode_suffix}")
+        else:
+            line_info = "Условие пока не выбрано"
+        self.refresh_index_value_controls()
+        self.info_label.setText(
+            f"Материалов: {len(self.df)}\n"
+            f"Подходящих: {len(suitable_df)}\n"
+            f"{line_info}"
+        )
+
+    def _refresh_line_fast(self):
+        """Live-drag redraw: reuses the group/subgroup/material patches cached by the
+        last full update_plot() and only recomputes what actually changes while the
+        line moves (suitability + line position), instead of clearing the figure and
+        rebuilding every shapely blob from scratch on every mouse-move event."""
+        cfg = self.current_condition_config()
+        if (
+            self.df is None
+            or cfg is None
+            or self._drag_ax is None
+            or self._drag_cfg is None
+            or cfg["label"] != self._drag_cfg["label"]
+            or self.condition_intercept is None
+        ):
+            self.update_plot()
             return
 
-        try:
-            # Применяем фильтры
-            filtered_df = self.filter_data()
+        x, y, suitable_mask, valid_mask = self.build_mask(self.df, self._drag_x_col, self._drag_y_col)
 
-            if filtered_df is None or len(filtered_df) == 0:
-                QMessageBox.warning(self, "Warning", "No data after filtering.")
-                return
+        for gid, (patch, idx) in self._drag_group_cache.items():
+            ok = bool(suitable_mask.loc[idx].any())
+            patch.set_alpha(0.23 if ok else 0.08)
+            patch.set_linewidth(2.0 if ok else 1.0)
 
-            # Получаем данные
-            x_data = pd.to_numeric(filtered_df[x_col], errors='coerce')
-            y_data = pd.to_numeric(filtered_df[y_col], errors='coerce')
+        for sname, (patch, idx) in self._drag_subgroup_cache.items():
+            ok = bool(suitable_mask.loc[idx].any())
+            patch.set_alpha(0.2 if ok else 0.06)
+            patch.set_linewidth(1.5 if ok else 0.8)
 
-            # Удаляем NaN значения
-            mask = ~(x_data.isna() | y_data.isna())
+        for patch, idx in self._drag_material_cache:
+            is_ok = bool(suitable_mask.loc[idx])
+            patch.set_alpha(0.9 if is_ok else 0.2)
 
-            # Для логарифмического масштаба нужны положительные значения
-            if self.log_x.isChecked():
-                mask &= (x_data > 0)
-            if self.log_y.isChecked():
-                mask &= (y_data > 0)
+        ax = self._drag_ax
+        x_lim = ax.get_xlim()
+        xx = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), 300)
+        yy = 10 ** (cfg["m"] * np.log10(xx) + self.condition_intercept)
+        if self.line_artist is not None:
+            self.line_artist.set_data(xx, yy)
+            line_val = cfg["from_b"](self.condition_intercept)
+            mode_suffix = " (авто)" if self.index_manual_value is None else ""
+            label = f"Условие {cfg['label']} = {line_val:.4g}{mode_suffix}"
+            self.line_artist.set_label(label)
+            legend = ax.get_legend()
+            if legend is not None and legend.get_texts():
+                legend.get_texts()[0].set_text(label)
 
-            x_clean = x_data[mask]
-            y_clean = y_data[mask]
+        suitable_df = self.df[suitable_mask].copy()
+        self._update_status_labels(suitable_df, cfg)
+        self.canvas.draw_idle()
 
-            if len(x_clean) == 0:
-                QMessageBox.warning(self, "Warning",
-                                    "No valid data points after filtering.\n"
-                                    "Try:\n"
-                                    "1. Disabling logarithmic scale\n"
-                                    "2. Changing filters\n"
-                                    "3. Selecting different columns")
-                return
+    def on_press(self, event):
+        if event.button == 2 and event.inaxes is not None:
+            self.panning = True
+            self.pan_start = (event.xdata, event.ydata, event.inaxes.get_xlim(), event.inaxes.get_ylim())
+            return
+        if event.inaxes is None or self.line_artist is None:
+            return
+        contains, _ = self.line_artist.contains(event)
+        if contains and event.button == 1:
+            self.dragging_line = True
 
-            # Очищаем фигуру
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
+    def on_motion(self, event):
+        if event.inaxes is None:
+            return
+        if self.dragging_line:
+            xlim = event.inaxes.get_xlim()
+            x_ref = np.sqrt(xlim[0] * xlim[1])
+            self._pending_drag_position = (event.ydata, x_ref)
+            self._schedule_drag_frame()
+            return
+        if self.panning and self.pan_start is not None:
+            start_x, start_y, xlim0, ylim0 = self.pan_start
+            if start_x and start_y and start_x > 0 and start_y > 0 and event.xdata and event.ydata:
+                dx = np.log10(event.xdata) - np.log10(start_x)
+                dy = np.log10(event.ydata) - np.log10(start_y)
+                new_xlim = (10 ** (np.log10(xlim0[0]) - dx), 10 ** (np.log10(xlim0[1]) - dx))
+                new_ylim = (10 ** (np.log10(ylim0[0]) - dy), 10 ** (np.log10(ylim0[1]) - dy))
+                event.inaxes.set_xlim(*new_xlim)
+                event.inaxes.set_ylim(*new_ylim)
+                self.canvas.draw_idle()
+            return
+        self.update_material_hover(event)
 
-            # Настройка масштаба осей
-            if self.log_x.isChecked() and x_clean.min() > 0:
-                ax.set_xscale("log")
-            if self.log_y.isChecked() and y_clean.min() > 0:
-                ax.set_yscale("log")
+    def on_release(self, event):
+        was_dragging = self.dragging_line
+        self.dragging_line = False
+        self.panning = False
+        self.pan_start = None
+        if was_dragging:
+            self._drag_timer.stop()
+            self._pending_drag_position = None
+            self.update_plot()
 
-            # Добавляем данные
-            if self.color_by_bandgap.isChecked() and 'band_gap' in filtered_df.columns:
-                # Раскрашиваем по band_gap
-                band_gap = pd.to_numeric(filtered_df.loc[mask, 'band_gap'], errors='coerce')
-                if not band_gap.isna().all():
-                    scatter = ax.scatter(x_clean, y_clean,
-                                         c=band_gap, cmap='viridis',
-                                         alpha=0.6, s=30, edgecolors='black',
-                                         linewidth=0.5, zorder=3)
-                    plt.colorbar(scatter, ax=ax, label='Band Gap (eV)')
-                else:
-                    ax.scatter(x_clean, y_clean,
-                               alpha=0.6, s=30, c='blue',
-                               edgecolors='black', linewidth=0.5, zorder=3)
-            else:
-                ax.scatter(x_clean, y_clean,
-                           alpha=0.6, s=30, c='blue',
-                           edgecolors='black', linewidth=0.5, zorder=3)
+    def on_scroll(self, event):
+        if event.inaxes is None:
+            return
+        if self.line_artist is not None and self.line_artist.contains(event)[0]:
+            self.shift_condition_line(+0.04 if event.button == "up" else -0.04)
+            return
+        self.zoom_plot(0.88 if event.button == "up" else 1.14)
 
-            # Добавляем области Эшби для модулей упругости
-            if self.show_ashby.isChecked():
-                if ('K_VRH' in x_col or 'bulk' in x_col.lower()) and ('G_VRH' in y_col or 'shear' in y_col.lower()):
-                    self.add_ashby_regions(ax)
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Up:
+            self.shift_condition_line(+0.04)
+            event.accept()
+            return
+        if event.key() == Qt.Key_Down:
+            self.shift_condition_line(-0.04)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
-            # Настройка подписей
-            x_label = x_col
-            y_label = y_col
+    def shift_condition_line(self, step):
+        cfg = self.current_condition_config()
+        if cfg is None:
+            return
+        baseline = self.condition_intercept if self.condition_intercept is not None else self.resolve_condition_intercept(cfg)
+        intercept = baseline + step
+        rng = self.index_value_range()
+        if rng is not None:
+            lo, hi = rng
+            intercept = max(cfg["to_b"](lo), min(cfg["to_b"](hi), intercept))
+        self.index_manual_value = cfg["from_b"](intercept)
+        self.update_plot()
 
-            # Добавляем единицы измерения
-            units = {
-                'elasticity.K_VRH': 'Bulk Modulus (GPa)',
-                'K_VRH': 'Bulk Modulus (GPa)',
-                'elasticity.G_VRH': 'Shear Modulus (GPa)',
-                'G_VRH': 'Shear Modulus (GPa)',
-                'band_gap': 'Band Gap (eV)',
-                'energy_per_atom': 'Energy per Atom (eV/atom)',
-                'formation_energy_per_atom': 'Formation Energy (eV/atom)',
-                'total_magnetization': 'Total Magnetization (μB)',
-                'e_above_hull': 'Energy Above Hull (eV/atom)'
+    def update_material_hover(self, event):
+        if self.hover_annotation is None:
+            self.hover_annotation = event.inaxes.annotate(
+                "",
+                xy=(0, 0),
+                xytext=(14, 14),
+                textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.55", fc="white", alpha=0.96, ec="#CBD5E1", lw=1.0),
+                fontsize=11,
+                zorder=30,
+            )
+            self.hover_annotation.set_clip_on(False)
+            self.hover_annotation.set_visible(False)
+
+        found = False
+        for patch, name in self.material_artists:
+            contains, _ = patch.contains(event)
+            if contains:
+                self.hover_annotation.xy = (event.xdata, event.ydata)
+                self.hover_annotation.set_text(name)
+                self.hover_annotation.set_visible(True)
+                self.adjust_hover_position(event, name)
+                found = True
+                break
+        if not found and event.xdata and event.ydata and self.material_points:
+            lx, ly = np.log10(event.xdata), np.log10(event.ydata)
+            nearest = min(
+                self.material_points,
+                key=lambda p: (np.log10(p[0]) - lx) ** 2 + (np.log10(p[1]) - ly) ** 2,
+            )
+            dist = ((np.log10(nearest[0]) - lx) ** 2 + (np.log10(nearest[1]) - ly) ** 2) ** 0.5
+            if dist < 0.06:
+                self.hover_annotation.xy = (nearest[0], nearest[1])
+                self.hover_annotation.set_text(nearest[2])
+                self.hover_annotation.set_visible(True)
+                self.adjust_hover_position(event, nearest[2])
+                found = True
+        if not found and self.hover_annotation.get_visible():
+            self.hover_annotation.set_visible(False)
+        self.canvas.draw_idle()
+
+    def adjust_hover_position(self, event, text):
+        ax = event.inaxes
+        if ax is None:
+            return
+        lines = max(1, text.count("\n") + 1)
+        dx = 14
+        dy = 14 if event.y < (ax.bbox.y0 + ax.bbox.y1) / 2 else -(22 + lines * 6)
+        self.hover_annotation.set_position((dx, dy))
+
+        renderer = self.canvas.get_renderer()
+        if renderer is None:
+            return
+        ann_box = self.hover_annotation.get_window_extent(renderer=renderer)
+        bounds = ax.bbox
+        pad = 6
+        shift_x = 0
+        shift_y = 0
+
+        if ann_box.x1 > bounds.x1 - pad:
+            shift_x = (bounds.x1 - pad) - ann_box.x1
+        elif ann_box.x0 < bounds.x0 + pad:
+            shift_x = (bounds.x0 + pad) - ann_box.x0
+
+        if ann_box.y1 > bounds.y1 - pad:
+            shift_y = (bounds.y1 - pad) - ann_box.y1
+        elif ann_box.y0 < bounds.y0 + pad:
+            shift_y = (bounds.y0 + pad) - ann_box.y0
+
+        if shift_x or shift_y:
+            ox, oy = self.hover_annotation.get_position()
+            to_pt = 72.0 / self.figure.dpi
+            self.hover_annotation.set_position((ox + shift_x * to_pt, oy + shift_y * to_pt))
+
+    def place_non_overlapping_label(self, ax, x, y, text, existing_points, fontsize=8, weight="normal", alpha=0.8, zorder=5):
+        anchor_px = ax.transData.transform((x, y))
+        candidate_offsets = [
+            (0, 0), (0, 14), (0, -14), (14, 0), (-14, 0),
+            (12, 12), (-12, 12), (12, -12), (-12, -12),
+            (0, 24), (24, 0), (-24, 0), (0, -24),
+        ]
+        min_dist_px = max(48, fontsize * 5)
+
+        best_offset = candidate_offsets[0]
+        best_score = -1
+        for dx, dy in candidate_offsets:
+            px = (anchor_px[0] + dx, anchor_px[1] + dy)
+            if not existing_points:
+                best_offset = (dx, dy)
+                break
+            dist = min(np.hypot(px[0] - ex, px[1] - ey) for ex, ey in existing_points)
+            if dist > min_dist_px:
+                best_offset = (dx, dy)
+                break
+            if dist > best_score:
+                best_score = dist
+                best_offset = (dx, dy)
+
+        final_px = (anchor_px[0] + best_offset[0], anchor_px[1] + best_offset[1])
+        existing_points.append(final_px)
+        txt = ax.annotate(
+            text,
+            xy=(x, y),
+            xytext=best_offset,
+            textcoords="offset points",
+            fontsize=fontsize,
+            weight=weight,
+            ha="center",
+            va="center",
+            alpha=alpha,
+            color="#0F172A",
+            zorder=zorder,
+            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.72 if alpha > 0.6 else 0.45),
+        )
+        txt.set_path_effects([pe.withStroke(linewidth=1.6, foreground="white", alpha=0.9)])
+
+    def zoom_plot(self, factor):
+        if self.figure.axes:
+            ax = self.figure.axes[0]
+            x0, x1 = ax.get_xlim()
+            y0, y1 = ax.get_ylim()
+            cx = np.sqrt(x0 * x1)
+            cy = np.sqrt(y0 * y1)
+            hx = (np.log10(x1) - np.log10(x0)) * 0.5 * factor
+            hy = (np.log10(y1) - np.log10(y0)) * 0.5 * factor
+            ax.set_xlim(10 ** (np.log10(cx) - hx), 10 ** (np.log10(cx) + hx))
+            ax.set_ylim(10 ** (np.log10(cy) - hy), 10 ** (np.log10(cy) + hy))
+            self.canvas.draw_idle()
+
+    def open_preview(self):
+        if self.last_suitable_df is None or self.last_suitable_df.empty:
+            QMessageBox.information(self, "Предпросмотр", "Подходящих материалов нет.")
+            return
+
+        preview_cols = [
+            "material_name",
+            "group_name",
+            "subgroup_name",
+            "Density_kg_m3",
+            "Youngs_Modulus_GPa",
+            "Strength_MPa",
+            "E_over_rho",
+            "Strength_over_rho",
+            "SqrtE_over_rho",
+        ]
+        show_cols = [c for c in preview_cols if c in self.last_suitable_df.columns]
+        col_titles_ru = {
+            "material_name": "Материал",
+            "group_name": "Группа",
+            "subgroup_name": "Подгруппа",
+            "Density_kg_m3": "Плотность, кг/м³",
+            "Youngs_Modulus_GPa": "Модуль Юнга, ГПа",
+            "Strength_MPa": "Прочность, МПа",
+            "E_over_rho": "E/ρ",
+            "Strength_over_rho": "σ/ρ",
+            "SqrtE_over_rho": "√E/ρ",
+        }
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Предварительный просмотр подходящих материалов")
+        dlg.resize(1600, 760)
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        table = QTableWidget()
+        table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            """
+            QTableWidget {
+                background: #FFFFFF;
+                border: 1px solid #E5EAF2;
+                gridline-color: #EEF2F7;
+                alternate-background-color: #F8FAFD;
+                font-size: 18px;
             }
+            QHeaderView::section {
+                background: #EEF3FF;
+                color: #1E293B;
+                padding: 10px;
+                border: none;
+                border-right: 1px solid #DFE7F3;
+                border-bottom: 1px solid #DFE7F3;
+                font-size: 19px;
+                font-weight: 700;
+            }
+            """
+        )
+        df = self.last_suitable_df[show_cols].reset_index(drop=True)
+        table.setColumnCount(len(show_cols))
+        table.setRowCount(len(df))
+        table.setHorizontalHeaderLabels([col_titles_ru.get(col, col) for col in show_cols])
+        table.verticalHeader().setDefaultSectionSize(42)
+        table.horizontalHeader().setMinimumHeight(48)
 
-            if x_col in units:
-                x_label = units[x_col]
-            if y_col in units:
-                y_label = units[y_col]
+        for r in range(len(df)):
+            for c, col in enumerate(show_cols):
+                table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
 
-            ax.set_xlabel(x_label, fontsize=12)
-            ax.set_ylabel(y_label, fontsize=12)
-
-            # Заголовок
-            title = f'Materials Properties: {y_col} vs {x_col}'
-            if len(filtered_df) < len(self.df):
-                title += f'\n(Showing {len(x_clean)} of {len(self.df)} materials)'
-            ax.set_title(title, fontsize=14, fontweight='bold')
-
-            # Сетка
-            ax.grid(True, which="both", linestyle="--", alpha=0.3, zorder=0)
-
-            # Настройка внешнего вида
-            for spine in ax.spines.values():
-                spine.set_linewidth(1.5)
-
-            self.figure.tight_layout()
-            self.canvas.draw()
-
-            # Обновляем информацию
-            stats_text = f"Displaying: {len(x_clean)} points\n"
-            stats_text += f"X range: {x_clean.min():.2e} - {x_clean.max():.2e}\n"
-            stats_text += f"Y range: {y_clean.min():.2e} - {y_clean.max():.2e}"
-            self.data_info_label.setText(stats_text)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to update plot:\n{str(e)}")
-            import traceback
-            traceback.print_exc()
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        header_metrics = table.horizontalHeader().fontMetrics()
+        for idx, col in enumerate(show_cols):
+            title = col_titles_ru.get(col, col)
+            min_width = header_metrics.horizontalAdvance(title) + 52
+            table.setColumnWidth(idx, max(min_width, 210))
+        required_width = table.verticalHeader().width() + 36
+        required_width += sum(table.columnWidth(idx) for idx in range(table.columnCount()))
+        dlg.resize(max(1600, required_width + 40), 760)
+        layout.addWidget(table)
+        dlg.exec_()
 
 
 def main():
@@ -494,5 +1343,5 @@ def main():
     sys.exit(app.exec_())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
