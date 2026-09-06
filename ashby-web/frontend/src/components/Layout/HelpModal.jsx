@@ -1,5 +1,6 @@
-import React, {useEffect} from 'react';
+import React, {useEffect, useRef} from 'react';
 import {CONDITION_OPTIONS, Formula} from '../../lib/conditionFormulas';
+import {useFocusTrap} from '../../hooks/useFocusTrap';
 
 const details = {
   stiffness: {
@@ -29,19 +30,21 @@ const details = {
 };
 
 export default function HelpModal({open, onClose}) {
+  const dialogRef = useRef(null);
   useEffect(() => {
     if (!open) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
+  useFocusTrap(open, dialogRef);
 
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-[rgba(22,19,31,0.55)] backdrop-blur-sm" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label="Справка по критериям эффективности" className="relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-[1.75rem] border border-[rgba(74,63,75,0.18)] bg-[rgb(240,217,228)] shadow-[0_30px_90px_rgba(22,19,31,0.35)]">
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Справка по критериям эффективности" className="relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-[1.75rem] border border-[rgba(74,63,75,0.18)] bg-[rgb(240,217,228)] shadow-[0_30px_90px_rgba(22,19,31,0.35)] focus:outline-none">
         <div className="flex items-center justify-between gap-3 border-b border-[rgba(74,63,75,0.14)] bg-[rgb(193,160,172)] px-6 py-4">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.24em] text-[rgb(74,63,75)]">Справка</p>

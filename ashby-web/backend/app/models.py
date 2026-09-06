@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import Optional
 
+import numpy as np
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -26,7 +27,10 @@ class AnalyzeRequest(BaseModel):
     x_max: Optional[float] = Field(default=None, gt=0)
     y_min: Optional[float] = Field(default=None, gt=0)
     y_max: Optional[float] = Field(default=None, gt=0)
-    intercept: Optional[float] = None
+    # Log10-space intercept for the merit-index guideline. +/-50 comfortably covers
+    # any physically plausible material property range while rejecting the huge
+    # values that would overflow 10**intercept to Infinity (invalid JSON).
+    intercept: Optional[float] = Field(default=None, ge=-50, le=50)
 
     @model_validator(mode="after")
     def validate_ranges(self):
@@ -34,6 +38,8 @@ class AnalyzeRequest(BaseModel):
             raise ValueError("x_min must be less than or equal to x_max")
         if self.y_min is not None and self.y_max is not None and self.y_min > self.y_max:
             raise ValueError("y_min must be less than or equal to y_max")
+        if self.intercept is not None and not np.isfinite(self.intercept):
+            raise ValueError("intercept must be a finite number")
         return self
 
 

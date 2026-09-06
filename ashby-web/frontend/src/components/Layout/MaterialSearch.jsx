@@ -1,10 +1,27 @@
-import React, {useMemo, useRef} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {useApp} from '../../context/AppContext';
 import {materialMatches} from '../../lib/materialSearch';
+
+const DEBOUNCE_MS = 250;
 
 export default function MaterialSearch({points}) {
   const {searchQuery, setSearchQuery} = useApp();
   const inputRef = useRef(null);
+  const timeoutRef = useRef(null);
+  const [text, setText] = useState(searchQuery);
+
+  // `text` updates on every keystroke so the input feels instant, but the
+  // shared `searchQuery` (a dependency of useDiagram's render effect, which
+  // rebuilds the entire SVG on every open chart) only updates after a short
+  // pause, so typing doesn't rebuild the diagram once per character.
+  const onChange = e => {
+    const value = e.target.value;
+    setText(value);
+    clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => setSearchQuery(value), DEBOUNCE_MS);
+  };
+
+  useEffect(() => () => clearTimeout(timeoutRef.current), []);
 
   const matches = useMemo(
     () => searchQuery.trim() ? (points || []).filter(p => materialMatches(p, searchQuery)) : [],
@@ -12,16 +29,20 @@ export default function MaterialSearch({points}) {
   );
 
   const total = points?.length ?? 0;
-  const isActive = searchQuery.trim().length > 0;
+  const isActive = text.trim().length > 0;
+  const pending = text !== searchQuery;
 
   let status = null;
   if (isActive) {
-    if (matches.length === 0) status = 'Ничего не найдено';
+    if (pending) status = 'Поиск…';
+    else if (matches.length === 0) status = 'Ничего не найдено';
     else if (matches.length === 1) status = `Найдено: ${matches[0].name}`;
     else status = `Найдено: ${matches.length} из ${total} материалов`;
   }
 
   const clear = () => {
+    clearTimeout(timeoutRef.current);
+    setText('');
     setSearchQuery('');
     inputRef.current?.focus();
   };
@@ -40,8 +61,8 @@ export default function MaterialSearch({points}) {
         <input
           ref={inputRef}
           type="text"
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
+          value={text}
+          onChange={onChange}
           onKeyDown={onKeyDown}
           placeholder="Поиск материала..."
           aria-label="Поиск материала"

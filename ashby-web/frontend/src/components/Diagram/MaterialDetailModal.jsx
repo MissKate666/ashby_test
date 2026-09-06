@@ -1,12 +1,15 @@
-import React, {useEffect} from 'react';
+import React, {useEffect, useRef} from 'react';
+import {useFocusTrap} from '../../hooks/useFocusTrap';
 
 export default function MaterialDetailModal({point, onClose}) {
+  const dialogRef = useRef(null);
   useEffect(() => {
     if (!point) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [point, onClose]);
+  useFocusTrap(!!point, dialogRef);
 
   if (!point) return null;
 
@@ -22,7 +25,7 @@ export default function MaterialDetailModal({point, onClose}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-[rgba(22,19,31,0.55)] backdrop-blur-sm" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label={`Материал: ${point.name}`} className="relative z-10 w-full max-w-md overflow-hidden rounded-[1.75rem] border border-[rgba(74,63,75,0.18)] bg-[rgb(240,217,228)] shadow-[0_30px_90px_rgba(22,19,31,0.35)]">
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Материал: ${point.name}`} className="relative z-10 w-full max-w-md overflow-hidden rounded-[1.75rem] border border-[rgba(74,63,75,0.18)] bg-[rgb(240,217,228)] shadow-[0_30px_90px_rgba(22,19,31,0.35)] focus:outline-none">
         <div className="flex items-center justify-between gap-3 border-b border-[rgba(74,63,75,0.14)] bg-[rgb(193,160,172)] px-6 py-4">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.24em] text-[rgb(74,63,75)]">Материал</p>

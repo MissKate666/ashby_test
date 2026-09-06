@@ -1,4 +1,5 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
+import {useFocusTrap} from '../../hooks/useFocusTrap';
 
 const columns = [
   ['name', 'Материал'],
@@ -12,6 +13,7 @@ const columns = [
 export default function MaterialsPreviewModal({open, onClose, points}) {
   const [sortKey, setSortKey] = useState('name');
   const [sortDir, setSortDir] = useState('asc');
+  const dialogRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
@@ -19,6 +21,7 @@ export default function MaterialsPreviewModal({open, onClose, points}) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
+  useFocusTrap(open, dialogRef);
 
   const rows = useMemo(() => {
     // `points` already excludes materials whose group is hidden on the chart this
@@ -44,7 +47,7 @@ export default function MaterialsPreviewModal({open, onClose, points}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-[rgba(22,19,31,0.55)] backdrop-blur-sm" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label="Предпросмотр подходящих материалов" className="relative z-10 flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-[1.75rem] border border-[rgba(74,63,75,0.18)] bg-[rgb(240,217,228)] shadow-[0_30px_90px_rgba(22,19,31,0.35)]">
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Предпросмотр подходящих материалов" className="relative z-10 flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-[1.75rem] border border-[rgba(74,63,75,0.18)] bg-[rgb(240,217,228)] shadow-[0_30px_90px_rgba(22,19,31,0.35)] focus:outline-none">
         <div className="flex items-center justify-between gap-3 border-b border-[rgba(74,63,75,0.14)] bg-[rgb(193,160,172)] px-6 py-4">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.24em] text-[rgb(74,63,75)]">Предпросмотр</p>

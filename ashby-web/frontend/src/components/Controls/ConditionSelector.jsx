@@ -24,7 +24,16 @@ export default function ConditionSelector() {
     return {...p, conditions, condition: conditions[0], intercept: null, intercepts: {}};
   });
 
-  const set = (k, v) => setParams(p => ({...p, [k]: v, intercept: k === 'preference' ? null : p.intercept, intercepts: k === 'preference' ? {} : p.intercepts}));
+  const set = (k, v) => setParams(p => {
+    if (k !== 'preference') return {...p, [k]: v};
+    // Flipping High/Low silently discarded any manually dragged line position --
+    // ask first so the user isn't surprised by losing a custom placement.
+    const hasCustomLine = Object.keys(p.intercepts || {}).length > 0 || (p.syncLines && p.intercept != null);
+    if (hasCustomLine && !window.confirm('Изменение "Подходит" сбросит вручную заданное положение линии критерия. Продолжить?')) {
+      return p;
+    }
+    return {...p, preference: v, intercept: null, intercepts: {}};
+  });
 
   return (
     <div className="grid gap-3">

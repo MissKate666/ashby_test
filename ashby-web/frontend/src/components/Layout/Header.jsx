@@ -2,7 +2,7 @@ import React, {useState} from 'react';
 import HelpModal from './HelpModal';
 import MaterialSearch from './MaterialSearch';
 
-export default function Header({onMenu, summary}){
+export default function Header({onMenu, summary, searchPoints}){
   const [helpOpen, setHelpOpen] = useState(false);
   return (
     <header className="relative overflow-hidden rounded-[2rem] border border-[rgba(74,63,75,0.18)] bg-[rgb(193,160,172)] p-4 shadow-[0_24px_70px_rgba(74,63,75,0.18)] md:p-6">
@@ -24,9 +24,9 @@ export default function Header({onMenu, summary}){
             </button>
           </div>
           <p className="mt-2 max-w-2xl text-sm font-semibold text-[rgb(74,63,75)] md:text-base">Эстетичный подбор материалов с мягкой палитрой, выразительными акцентами и чистой научной визуализацией.</p>
-          <MaterialSearch points={summary?.points} />
+          <MaterialSearch points={searchPoints ?? summary?.points} />
         </div>
-        <button onClick={onMenu} className="btn-secondary lg:hidden">☰</button>
+        <button onClick={onMenu} className="btn-secondary md:hidden">☰</button>
       </div>
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </header>

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from fastapi import HTTPException
 try:
     from shapely.geometry import LineString, MultiPoint, Point, Polygon
 except ModuleNotFoundError:  # Allows lightweight validation when optional deps are unavailable.
@@ -10,20 +11,20 @@ from app.models import AnalyzeRequest, AnalyzeResponse, Condition, ConditionLine
 
 def current_condition_config(condition: Condition):
     if condition == Condition.stiffness:
-        return {"y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ", "to_b": lambda v: np.log10(v)}
+        return {"y_col": "Youngs_Modulus_GPa", "m": 1.0, "label": "E/ρ"}
     if condition == Condition.strength:
-        return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ", "to_b": lambda v: np.log10(v)}
+        return {"y_col": "Strength_MPa", "m": 1.0, "label": "σ/ρ"}
     if condition == Condition.bending:
-        return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ", "to_b": lambda v: 2 * np.log10(v)}
+        return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "√E/ρ"}
     if condition == Condition.plate_stiffness:
-        return {"y_col": "Youngs_Modulus_GPa", "m": 3.0, "label": "E^(1/3)/ρ", "to_b": lambda v: 3 * np.log10(v)}
+        return {"y_col": "Youngs_Modulus_GPa", "m": 3.0, "label": "E^(1/3)/ρ"}
     if condition == Condition.beam_strength:
-        return {"y_col": "Strength_MPa", "m": 1.5, "label": "σ^(2/3)/ρ", "to_b": lambda v: 1.5 * np.log10(v)}
+        return {"y_col": "Strength_MPa", "m": 1.5, "label": "σ^(2/3)/ρ"}
     if condition == Condition.column_stiffness:
         # Same merit index (and slope) as `bending` above -- E^(1/2)/ρ is the standard
         # Ashby index for both light stiff beams in bending and light stiff columns in
-        # buckling, so these two conditions share m/to_b by design, not by mistake.
-        return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "E^(1/2)/ρ", "to_b": lambda v: 2 * np.log10(v)}
+        # buckling, so these two conditions share m by design, not by mistake.
+        return {"y_col": "Youngs_Modulus_GPa", "m": 2.0, "label": "E^(1/2)/ρ"}
     return None
 
 
@@ -96,15 +97,11 @@ def build_mask(df: pd.DataFrame, request: AnalyzeRequest, x_col: str, y_col: str
     if request.x_min is not None: final &= x >= request.x_min
     if request.x_max is not None: final &= x <= request.x_max
     if request.y_min is not None: final &= y >= request.y_min
-    if request.y_max is not None: final &= y <= request.y_min if False else y <= request.y_max
+    if request.y_max is not None: final &= y <= request.y_max
     return x, y, final, valid
 
 
-def analyze(df: pd.DataFrame, groups_df: pd.DataFrame, request: AnalyzeRequest) -> AnalyzeResponse:
-    x_col = "Density_kg_m3"
-    cfg = current_condition_config(request.condition)
-    y_col = cfg["y_col"] if cfg else "Youngs_Modulus_GPa"
-    base_valid = (pd.to_numeric(df[x_col], errors="coerce") > 0) & (pd.to_numeric(df[y_col], errors="coerce") > 0)
+def resolve_intercept(df: pd.DataFrame, request: AnalyzeRequest, x_col: str, y_col: str, cfg) -> float:
     intercept = request.intercept
     if cfg and intercept is None:
         # Auto/median mode: the intercept in log-log "b" space is directly
@@ -115,13 +112,40 @@ def analyze(df: pd.DataFrame, groups_df: pd.DataFrame, request: AnalyzeRequest) 
         # ratio column needed (those don't exist for every condition, and
         # checking them against this dataset showed they don't reliably match
         # this formula for the ones that do have one).
+        base_valid = (pd.to_numeric(df[x_col], errors="coerce") > 0) & (pd.to_numeric(df[y_col], errors="coerce") > 0)
         lx_all = np.log10(pd.to_numeric(df.loc[base_valid, "Density_kg_m3"], errors="coerce"))
         ly_all = np.log10(pd.to_numeric(df.loc[base_valid, cfg["y_col"]], errors="coerce"))
         b_vals = ly_all - cfg["m"] * lx_all
         b_vals = b_vals[np.isfinite(b_vals)]
         intercept = float(b_vals.median()) if len(b_vals) else 0.0
     intercept = float(intercept or 0.0)
+    if not np.isfinite(intercept):
+        raise HTTPException(422, "intercept must be a finite number")
+    return intercept
+
+
+def compute_suitable_mask(df: pd.DataFrame, request: AnalyzeRequest):
+    """Lightweight mask computation (no group/subgroup polygon building) for
+    callers -- like CSV/Excel export -- that only need to know which materials
+    are suitable, not the full chart payload."""
+    x_col = "Density_kg_m3"
+    cfg = current_condition_config(request.condition)
+    y_col = cfg["y_col"] if cfg else "Youngs_Modulus_GPa"
+    intercept = resolve_intercept(df, request, x_col, y_col, cfg)
+    _, _, suitable, valid = build_mask(df, request, x_col, y_col, intercept)
+    if not valid.any():
+        raise HTTPException(422, "No materials match the current dataset/axis filters")
+    return suitable
+
+
+def analyze(df: pd.DataFrame, groups_df: pd.DataFrame, request: AnalyzeRequest) -> AnalyzeResponse:
+    x_col = "Density_kg_m3"
+    cfg = current_condition_config(request.condition)
+    y_col = cfg["y_col"] if cfg else "Youngs_Modulus_GPa"
+    intercept = resolve_intercept(df, request, x_col, y_col, cfg)
     x, y, suitable, valid = build_mask(df, request, x_col, y_col, intercept)
+    if not valid.any():
+        raise HTTPException(422, "No materials match the current dataset/axis filters")
     valid_df = df[valid].copy()
     x_vals = x[valid]; y_vals = y[valid]
     x_margin = y_margin = 10 ** 0.16
